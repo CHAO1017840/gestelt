@@ -3,14 +3,16 @@
 This package ports the `imu_listener_pkg` AirIMU algorithm from the
 `souvik_radxa_v116` branch to ROS 2 Humble.
 
-The node subscribes to `sensor_msgs/msg/Imu` and publishes
-`ai_msgs/msg/ImuNoise`. The four ONNX outputs are reduced to the latest
-accelerometer and gyroscope variance estimates. The ONNX model expects a
-209-sample window: 200 real samples plus 9 stationary padding samples.
+The main node subscribes to `sensor_msgs/msg/Imu`,
+publishes `ai_msgs/msg/ImuNoise`, and publishes the corrected acceleration
+and angular velocity on a separate `sensor_msgs/msg/Imu` topic. The ONNX model
+expects a 209-sample window: 200 real samples plus 9 stationary padding
+samples.
 
-This package estimates IMU uncertainty. It does not estimate or publish
-velocity; the existing `ai_velocity_bridge.py` consumes a separate
-`geometry_msgs/msg/Vector3Stamped` velocity source.
+An optional experimental node integrates the corrected IMU into velocity-only
+odometry. It is not a learned velocity model and it has no visual or GPS
+position aiding. It is intended for SITL experiments and bench validation,
+not as a flight-safety VIO replacement.
 
 ## Install
 
@@ -54,6 +56,7 @@ Default topics:
 ```text
 /drone0/mavros/imu/data_raw
 /drone0/mavros/ai/imu_noise
+/drone0/mavros/ai/imu_corrected
 ```
 
 Check the output:
@@ -69,3 +72,69 @@ output rate is about 40 Hz. Set `inference_stride:=1` to infer at 200 Hz.
 The default `remap_mavros_axes:=true` applies the original Radxa client's
 `[z, -y, x]` model-axis mapping. Set it to `false` when the input IMU is
 already in the model's expected axes.
+
+## Experimental velocity from corrected IMU
+
+Enable the velocity estimator with the main node:
+
+```bash
+ros2 launch imu_listener_pkg ai_imu_ros2.launch.py \
+  namespace:=drone0 \
+  enable_velocity_estimator:=true
+```
+
+This starts a strapdown estimator that:
+
+1. Integrates corrected angular velocity into attitude.
+2. Rotates corrected body acceleration into the world frame.
+3. Removes the configured gravity vector.
+4. Trapezoidally integrates acceleration into velocity.
+
+The first 200 corrected samples, about 5 seconds at the default output rate,
+are collected while the vehicle must remain stationary. They estimate the
+corrected gyro bias and residual gravity/bias vector. Velocity remains zero
+during this calibration window. Set `velocity_initialization_samples:=0` only
+for synthetic tests where bias is already known to be zero.
+
+The current estimator starts with identity roll/pitch/yaw. The vehicle must
+start upright and level; yaw is unobservable from accelerometer data alone.
+
+It publishes:
+
+```text
+/drone0/mavros/odometry/out      nav_msgs/msg/Odometry
+/drone0/ai_imu/velocity          geometry_msgs/msg/Vector3Stamped
+```
+
+The odometry pose contains NaNs and large position covariance. Only the
+linear velocity and its covariance are valid.
+
+It can also be launched through the existing scenario:
+
+```bash
+ros2 launch gestelt_bringup scenario_ros2.launch.py \
+  scenario:=empty_map \
+  use_mavros:=true \
+  use_ai_imu:=true \
+  use_ai_imu_velocity:=true
+```
+
+Do not enable `use_ai_velocity` at the same time; that option starts the
+existing bridge, which would create a second publisher for
+`mavros/odometry/out`.
+
+For velocity-only external navigation in PX4:
+
+```text
+param set EKF2_EV_CTRL 4
+param set EKF2_GPS_CTRL 0
+param set EKF2_HGT_REF 0
+param save
+```
+
+Run the IMU and PX4 coordinate conventions through a bench test before any
+flight. The estimator starts with identity attitude, and corrected gyro or
+accelerometer bias will cause attitude and velocity drift. It has no
+zero-velocity update and no absolute position correction. Keep an independent
+manual takeover path and do not use it for autonomous real flight without
+controlled validation.

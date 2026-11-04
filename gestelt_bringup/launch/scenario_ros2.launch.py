@@ -108,9 +108,26 @@ def launch_setup(context, *args, **kwargs):
     use_ai_velocity = (
         context.launch_configurations.get("use_ai_velocity", "false") == "true"
     )
+    use_ai_imu = (
+        context.launch_configurations.get("use_ai_imu", "false") == "true"
+    )
+    use_ai_imu_velocity = (
+        context.launch_configurations.get(
+            "use_ai_imu_velocity", "false"
+        )
+        == "true"
+    )
+    if use_ai_imu_velocity and not use_ai_imu:
+        raise RuntimeError(
+            "use_ai_imu_velocity requires use_ai_imu:=true"
+        )
+    if use_ai_velocity and use_ai_imu_velocity:
+        raise RuntimeError(
+            "Enable either use_ai_velocity or use_ai_imu_velocity, not both"
+        )
     mavros_plugins_file = (
         "mavros_px4_gestelt_plugins_ai.yaml"
-        if use_ai_velocity
+        if use_ai_velocity or use_ai_imu_velocity
         else "mavros_px4_gestelt_plugins.yaml"
     )
     mavros_plugins = os.path.join(share, "config", mavros_plugins_file)
@@ -173,6 +190,9 @@ def launch_setup(context, *args, **kwargs):
             parameters=[{
                 "imu_topic": LaunchConfiguration("ai_imu_input_topic"),
                 "noise_topic": LaunchConfiguration("ai_imu_noise_topic"),
+                "corrected_imu_topic": LaunchConfiguration(
+                    "ai_imu_corrected_topic"
+                ),
                 "model_path": LaunchConfiguration("ai_imu_model_path"),
                 "buffer_size": LaunchConfiguration("ai_imu_buffer_size"),
                 "target_imu_hz": LaunchConfiguration("ai_imu_target_hz"),
@@ -187,6 +207,34 @@ def launch_setup(context, *args, **kwargs):
                 ),
             }],
             condition=IfCondition(LaunchConfiguration("use_ai_imu")),
+        ),
+        Node(
+            package="imu_listener_pkg",
+            executable="ai_imu_velocity.py",
+            name="ai_imu_velocity",
+            namespace="drone0",
+            output="screen",
+            parameters=[{
+                "corrected_imu_topic": LaunchConfiguration(
+                    "ai_imu_corrected_topic"
+                ),
+                "output_topic": "mavros/odometry/out",
+                "velocity_topic": "ai_imu/velocity",
+                "parent_frame": "map",
+                "child_frame": "drone0_base_link",
+                "initial_velocity_variance": LaunchConfiguration(
+                    "ai_imu_velocity_variance"
+                ),
+                "process_noise_accel_variance": LaunchConfiguration(
+                    "ai_imu_process_noise"
+                ),
+                "initialization_samples": LaunchConfiguration(
+                    "ai_imu_velocity_initialization_samples"
+                ),
+            }],
+            condition=IfCondition(
+                LaunchConfiguration("use_ai_imu_velocity")
+            ),
         ),
     ]
 
@@ -319,7 +367,7 @@ def launch_setup(context, *args, **kwargs):
                 parameters=[{"num_drones": num_drones, "check_collision_freq": 10.0}],
             )
         )
-    if use_ai_velocity:
+    if use_ai_velocity or use_ai_imu_velocity:
         actions.append(
             Node(
                 package="gestelt_bringup",
@@ -424,6 +472,11 @@ def generate_launch_description():
             description="Relative ai_msgs/ImuNoise output topic.",
         ),
         DeclareLaunchArgument(
+            "ai_imu_corrected_topic",
+            default_value="mavros/ai/imu_corrected",
+            description="Relative corrected sensor_msgs/Imu topic.",
+        ),
+        DeclareLaunchArgument(
             "ai_imu_model_path",
             default_value="",
             description="ONNX model path; empty selects the packaged model.",
@@ -452,6 +505,28 @@ def generate_launch_description():
             "ai_imu_remap_mavros_axes",
             default_value="true",
             description="Map MAVROS FLU axes to the AirIMU model axes.",
+        ),
+        DeclareLaunchArgument(
+            "use_ai_imu_velocity",
+            default_value="false",
+            description=(
+                "Start experimental velocity-only odometry from corrected IMU."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_velocity_variance",
+            default_value="0.04",
+            description="Initial AI IMU velocity covariance.",
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_process_noise",
+            default_value="0.01",
+            description="Velocity process-noise acceleration variance.",
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_velocity_initialization_samples",
+            default_value="200",
+            description="Stationary corrected-IMU samples used for gyro bias.",
         ),
         DeclareLaunchArgument(
             "use_ai_velocity",

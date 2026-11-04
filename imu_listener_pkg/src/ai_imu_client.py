@@ -40,6 +40,10 @@ class AiImuClient(Node):
 
         self.declare_parameter("imu_topic", "mavros/imu/data_raw")
         self.declare_parameter("noise_topic", "mavros/ai/imu_noise")
+        self.declare_parameter(
+            "corrected_imu_topic", "mavros/ai/imu_corrected"
+        )
+        self.declare_parameter("publish_corrected_imu", True)
         self.declare_parameter("model_path", "")
         self.declare_parameter("buffer_size", 200)
         self.declare_parameter("target_imu_hz", 200.0)
@@ -58,6 +62,12 @@ class AiImuClient(Node):
         self.noise_topic = str(
             self.get_parameter("noise_topic").value
         ).strip()
+        self.corrected_imu_topic = str(
+            self.get_parameter("corrected_imu_topic").value
+        ).strip()
+        self.publish_corrected_imu = _as_bool(
+            self.get_parameter("publish_corrected_imu").value
+        )
         self.buffer_size = int(self.get_parameter("buffer_size").value)
         self.target_imu_hz = float(
             self.get_parameter("target_imu_hz").value
@@ -129,6 +139,11 @@ class AiImuClient(Node):
         self.noise_publisher = self.create_publisher(
             ImuNoise, self.noise_topic, 10
         )
+        self.corrected_imu_publisher = None
+        if self.publish_corrected_imu:
+            self.corrected_imu_publisher = self.create_publisher(
+                Imu, self.corrected_imu_topic, 10
+            )
         self.imu_subscription = self.create_subscription(
             Imu,
             self.imu_topic,
@@ -143,6 +158,10 @@ class AiImuClient(Node):
             f"AirIMU buffer={self.buffer_size}, "
             f"input={self.imu_topic}, output={self.noise_topic}"
         )
+        if self.corrected_imu_publisher is not None:
+            self.get_logger().info(
+                f"corrected_imu={self.corrected_imu_topic}"
+            )
         self.get_logger().info(
             f"interpolate={self.interpolate}, "
             f"target={self.target_imu_hz:.1f} Hz, "
@@ -153,6 +172,11 @@ class AiImuClient(Node):
     def _validate_parameters(self):
         if not self.imu_topic or not self.noise_topic:
             raise ValueError("IMU and noise topics must not be empty")
+        if self.publish_corrected_imu and not self.corrected_imu_topic:
+            raise ValueError(
+                "corrected_imu_topic must not be empty when publishing "
+                "corrected IMU"
+            )
         if self.buffer_size <= 0:
             raise ValueError("buffer_size must be positive")
         if self.target_imu_hz <= 0.0:
@@ -348,7 +372,12 @@ class AiImuClient(Node):
             return None
 
         start_time = time.perf_counter()
-        _, _, accel_var_model, gyro_var_model = (
+        (
+            corrected_accel_model,
+            corrected_gyro_model,
+            accel_var_model,
+            gyro_var_model,
+        ) = (
             self.inference.infer_current_buffer()
         )
         inference_ms = (
@@ -360,6 +389,16 @@ class AiImuClient(Node):
                 f"Slow inference: {inference_ms:.1f} ms"
             )
 
+        corrected_accel = np.asarray(
+            corrected_accel_model, dtype=np.float64
+        )[self.inverse_axis_order] * self.axis_signs[
+            self.inverse_axis_order
+        ]
+        corrected_gyro = np.asarray(
+            corrected_gyro_model, dtype=np.float64
+        )[self.inverse_axis_order] * self.axis_signs[
+            self.inverse_axis_order
+        ]
         accel_var = np.asarray(
             accel_var_model, dtype=np.float64
         )[-1][self.inverse_axis_order]
@@ -367,7 +406,9 @@ class AiImuClient(Node):
             gyro_var_model, dtype=np.float64
         )[-1][self.inverse_axis_order]
         if not (
-            np.isfinite(accel_var).all()
+            np.isfinite(corrected_accel).all()
+            and np.isfinite(corrected_gyro).all()
+            and np.isfinite(accel_var).all()
             and np.isfinite(gyro_var).all()
         ):
             self.stats["corrupted_outputs"] += 1
@@ -377,6 +418,8 @@ class AiImuClient(Node):
             return None
 
         return {
+            "corrected_accel": corrected_accel,
+            "corrected_gyro": corrected_gyro,
             "accel_noise": accel_var,
             "gyro_noise": gyro_var,
             "inference_ms": inference_ms,
@@ -402,6 +445,33 @@ class AiImuClient(Node):
             )
         self.stats["samples_published"] += 1
 
+    def _publish_corrected_imu(self, noise: dict):
+        if self.corrected_imu_publisher is None:
+            return
+        if not self.inference.buffer.is_filled():
+            return
+
+        message = Imu()
+        message.header = noise["header"]
+        corrected_accel = noise["corrected_accel"]
+        corrected_gyro = noise["corrected_gyro"]
+        message.linear_acceleration.x = float(corrected_accel[0])
+        message.linear_acceleration.y = float(corrected_accel[1])
+        message.linear_acceleration.z = float(corrected_accel[2])
+        message.angular_velocity.x = float(corrected_gyro[0])
+        message.angular_velocity.y = float(corrected_gyro[1])
+        message.angular_velocity.z = float(corrected_gyro[2])
+        message.orientation_covariance[0] = -1.0
+        for index, value in enumerate(noise["accel_noise"]):
+            message.linear_acceleration_covariance[index * 4] = float(
+                value
+            )
+        for index, value in enumerate(noise["gyro_noise"]):
+            message.angular_velocity_covariance[index * 4] = float(
+                value
+            )
+        self.corrected_imu_publisher.publish(message)
+
     def _drain_queue(self):
         while self.process_queue:
             sample = self.process_queue.popleft()
@@ -415,6 +485,7 @@ class AiImuClient(Node):
                 continue
             if noise is not None:
                 self._publish_noise(noise)
+                self._publish_corrected_imu(noise)
                 self.stats["samples_processed"] += 1
 
     def _log_statistics(self):
