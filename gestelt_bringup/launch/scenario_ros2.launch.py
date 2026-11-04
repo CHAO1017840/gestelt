@@ -164,6 +164,30 @@ def launch_setup(context, *args, **kwargs):
             ],
             condition=IfCondition(LaunchConfiguration("use_mavros")),
         ),
+        Node(
+            package="imu_listener_pkg",
+            executable="ai_imu_client.py",
+            name="ai_imu_client",
+            namespace="drone0",
+            output="screen",
+            parameters=[{
+                "imu_topic": LaunchConfiguration("ai_imu_input_topic"),
+                "noise_topic": LaunchConfiguration("ai_imu_noise_topic"),
+                "model_path": LaunchConfiguration("ai_imu_model_path"),
+                "buffer_size": LaunchConfiguration("ai_imu_buffer_size"),
+                "target_imu_hz": LaunchConfiguration("ai_imu_target_hz"),
+                "interpolate": LaunchConfiguration(
+                    "ai_imu_interpolate"
+                ),
+                "inference_stride": LaunchConfiguration(
+                    "ai_imu_inference_stride"
+                ),
+                "remap_mavros_axes": LaunchConfiguration(
+                    "ai_imu_remap_mavros_axes"
+                ),
+            }],
+            condition=IfCondition(LaunchConfiguration("use_ai_imu")),
+        ),
     ]
 
     for drone_id in range(num_drones):
@@ -383,6 +407,51 @@ def generate_launch_description():
             "mavros_fcu_url",
             default_value="udp://:14540@127.0.0.1:14580",
             description="MAVROS FCU endpoint for PX4 SITL.",
+        ),
+        DeclareLaunchArgument(
+            "use_ai_imu",
+            default_value="false",
+            description="Start AirIMU ONNX noise inference for drone0.",
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_input_topic",
+            default_value="mavros/imu/data_raw",
+            description="Relative sensor_msgs/Imu topic used by AirIMU.",
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_noise_topic",
+            default_value="mavros/ai/imu_noise",
+            description="Relative ai_msgs/ImuNoise output topic.",
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_model_path",
+            default_value="",
+            description="ONNX model path; empty selects the packaged model.",
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_buffer_size",
+            default_value="200",
+            description="Real IMU samples in each AirIMU inference window.",
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_target_hz",
+            default_value="200.0",
+            description="Interpolated AirIMU input rate.",
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_interpolate",
+            default_value="true",
+            description="Interpolate raw IMU samples to the target rate.",
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_inference_stride",
+            default_value="5",
+            description="Infer once per N interpolated IMU samples.",
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_remap_mavros_axes",
+            default_value="true",
+            description="Map MAVROS FLU axes to the AirIMU model axes.",
         ),
         DeclareLaunchArgument(
             "use_ai_velocity",
