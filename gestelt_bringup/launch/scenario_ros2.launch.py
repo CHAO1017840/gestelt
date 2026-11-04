@@ -220,8 +220,12 @@ def launch_setup(context, *args, **kwargs):
                 ),
                 "output_topic": "mavros/odometry/out",
                 "velocity_topic": "ai_imu/velocity",
+                "local_position_topic": "mavros/local_position/odom",
                 "parent_frame": "map",
                 "child_frame": "drone0_base_link",
+                "start_enabled": LaunchConfiguration(
+                    "ai_imu_velocity_start_enabled"
+                ),
                 "initial_velocity_variance": LaunchConfiguration(
                     "ai_imu_velocity_variance"
                 ),
@@ -511,6 +515,14 @@ def generate_launch_description():
             default_value="false",
             description=(
                 "Start experimental velocity-only odometry from corrected IMU."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_velocity_start_enabled",
+            default_value="false",
+            description=(
+                "Publish AI velocity immediately. Keep false for VIO-primary "
+                "flight and enable it manually after a VIO failure."
             ),
         ),
         DeclareLaunchArgument(

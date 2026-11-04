@@ -102,12 +102,35 @@ start upright and level; yaw is unobservable from accelerometer data alone.
 It publishes:
 
 ```text
-/drone0/mavros/odometry/out      nav_msgs/msg/Odometry
-/drone0/ai_imu/velocity          geometry_msgs/msg/Vector3Stamped
+/drone0/mavros/odometry/out                    nav_msgs/msg/Odometry
+/drone0/ai_imu/velocity                        geometry_msgs/msg/Vector3Stamped
+/drone0/ai_imu_velocity/enable_nav             std_srvs/srv/SetBool
 ```
 
-The odometry pose contains NaNs and large position covariance. Only the
-linear velocity and its covariance are valid.
+The odometry pose contains AI velocity-integrated position, seeded from the PX4
+local position when failover is enabled, with very large covariance. This keeps
+external-vision position fusion continuous while VIO is lost, but the position
+is dead-reckoned and will drift. Do not use NaN pose fields when VIO and AI
+velocity are both active: PX4 restarts external-vision position fusion each
+time the interleaved NaN sample arrives.
+
+For VIO-primary flight, launch with `velocity_start_enabled:=false`. The
+estimator remains calibrated, continuously aligns its standby state to the
+healthy PX4 local velocity/attitude, and publishes the monitoring vector topic,
+but it does not send odometry to PX4. Enable navigation while VIO is still
+healthy, immediately before removing it:
+
+```bash
+ros2 service call /drone0/ai_imu_velocity/enable_nav \
+  std_srvs/srv/SetBool "{data: true}"
+```
+
+On enable, the estimator is seeded from the current PX4 local position,
+velocity, and attitude, so standby drift is not injected into EKF2. The resulting
+position is then propagated from AI velocity. A VIO-off test remained in
+OFFBOARD for about 24 seconds; horizontal position drifted about 0.3 m and
+height about 0.6 m. Restoring VIO directly can cause a position reset because
+the AI and VIO position references have diverged.
 
 It can also be launched through the existing scenario:
 
@@ -116,21 +139,27 @@ ros2 launch gestelt_bringup scenario_ros2.launch.py \
   scenario:=empty_map \
   use_mavros:=true \
   use_ai_imu:=true \
-  use_ai_imu_velocity:=true
+  use_ai_imu_velocity:=true \
+  ai_imu_velocity_start_enabled:=false
 ```
 
 Do not enable `use_ai_velocity` at the same time; that option starts the
 existing bridge, which would create a second publisher for
 `mavros/odometry/out`.
 
-For velocity-only external navigation in PX4:
+For simultaneous VIO position and AI velocity, keep the GPS disabled, use a
+barometer-backed height reference, and allow external position/velocity/yaw:
 
 ```text
-param set EKF2_EV_CTRL 4
+param set EKF2_EV_CTRL 15
 param set EKF2_GPS_CTRL 0
 param set EKF2_HGT_REF 0
 param save
 ```
+
+When VIO stops, `cs_ev_vel` and the AI-fed position remain active and
+`cs_baro_hgt` remains available. The position is dead-reckoned from AI velocity
+and will drift.
 
 Run the IMU and PX4 coordinate conventions through a bench test before any
 flight. The estimator starts with identity attitude, and corrected gyro or

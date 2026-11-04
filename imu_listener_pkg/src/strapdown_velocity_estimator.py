@@ -86,9 +86,13 @@ class StrapdownVelocityEstimator:
         self.reset()
 
     def reset(self):
-        """Reset velocity and attitude to the initial state."""
+        """Reset position, velocity and attitude to the initial state."""
         self.orientation = np.array(
             [0.0, 0.0, 0.0, 1.0], dtype=np.float64
+        )
+        self.position = np.zeros(3, dtype=np.float64)
+        self.position_covariance = np.eye(3) * (
+            self.initial_velocity_variance
         )
         self.velocity = np.zeros(3, dtype=np.float64)
         self.velocity_covariance = np.eye(3) * (
@@ -102,6 +106,99 @@ class StrapdownVelocityEstimator:
         self.initialized = self.initialization_samples == 0
         self._initial_accel_sum = np.zeros(3, dtype=np.float64)
         self._initial_gyro_sum = np.zeros(3, dtype=np.float64)
+
+    def set_state_from_body_velocity(
+        self,
+        body_velocity: np.ndarray,
+        orientation: np.ndarray,
+        velocity_variance: Optional[np.ndarray] = None,
+        world_position: Optional[np.ndarray] = None,
+    ):
+        """Reset position, velocity and attitude from a trusted state."""
+        body_velocity = np.asarray(
+            body_velocity, dtype=np.float64
+        ).reshape(3)
+        orientation = _normalize_quaternion(
+            np.asarray(orientation, dtype=np.float64).reshape(4)
+        )
+        if not (
+            np.isfinite(body_velocity).all()
+            and np.isfinite(orientation).all()
+        ):
+            raise ValueError("body velocity and orientation must be finite")
+
+        self.orientation = orientation
+        self.velocity = _rotate_with_quaternion(
+            body_velocity, self.orientation
+        )
+        if world_position is not None:
+            world_position = np.asarray(
+                world_position, dtype=np.float64
+            ).reshape(3)
+            if not np.isfinite(world_position).all():
+                raise ValueError("world position must be finite")
+            self.position = world_position
+            self.position_covariance = np.eye(3) * (
+                self.initial_velocity_variance
+            )
+        if velocity_variance is None:
+            self.velocity_covariance = np.eye(3) * (
+                self.initial_velocity_variance
+            )
+        else:
+            velocity_variance = np.asarray(
+                velocity_variance, dtype=np.float64
+            ).reshape(3)
+            self.velocity_covariance = np.diag(
+                np.maximum(
+                    velocity_variance,
+                    self.initial_velocity_variance,
+                )
+            )
+        self.previous_accel_world = None
+        self.previous_stamp = None
+
+    def world_to_body_velocity(
+        self, world_velocity: np.ndarray
+    ) -> np.ndarray:
+        """Rotate a world-frame velocity into the current body frame."""
+        world_velocity = np.asarray(
+            world_velocity, dtype=np.float64
+        ).reshape(3)
+        conjugate = self.orientation * np.array(
+            [-1.0, -1.0, -1.0, 1.0]
+        )
+        return _rotate_with_quaternion(world_velocity, conjugate)
+
+    def world_to_body_covariance(
+        self, world_covariance: np.ndarray
+    ) -> np.ndarray:
+        """Rotate a world-frame covariance into the current body frame."""
+        world_covariance = np.asarray(
+            world_covariance, dtype=np.float64
+        ).reshape(3, 3)
+        x, y, z, w = self.orientation
+        rotation = np.array(
+            [
+                [
+                    1.0 - 2.0 * (y * y + z * z),
+                    2.0 * (x * y - z * w),
+                    2.0 * (x * z + y * w),
+                ],
+                [
+                    2.0 * (x * y + z * w),
+                    1.0 - 2.0 * (x * x + z * z),
+                    2.0 * (y * z - x * w),
+                ],
+                [
+                    2.0 * (x * z - y * w),
+                    2.0 * (y * z + x * w),
+                    1.0 - 2.0 * (x * x + y * y),
+                ],
+            ],
+            dtype=np.float64,
+        )
+        return rotation.T @ world_covariance @ rotation
 
     def _integrate_orientation(
         self, angular_velocity: np.ndarray, dt: float
@@ -198,7 +295,14 @@ class StrapdownVelocityEstimator:
             average_accel = 0.5 * (
                 self.previous_accel_world + accel_world
             )
+            previous_velocity = self.velocity.copy()
             self.velocity += average_accel * dt
+            self.position += 0.5 * (
+                previous_velocity + self.velocity
+            ) * dt
+            self.position_covariance += (
+                self.velocity_covariance * dt * dt
+            )
             effective_variance = (
                 acceleration_variance
                 + self.process_noise_accel_variance

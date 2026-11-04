@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Estimate velocity from AirIMU-corrected IMU measurements."""
 
-import math
 import os
 import signal
 import sys
@@ -14,6 +13,7 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
+from std_srvs.srv import SetBool
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
@@ -41,8 +41,12 @@ class AiImuVelocity(Node):
         )
         self.declare_parameter("output_topic", "mavros/odometry/out")
         self.declare_parameter("velocity_topic", "ai_imu/velocity")
+        self.declare_parameter(
+            "local_position_topic", "mavros/local_position/odom"
+        )
         self.declare_parameter("parent_frame", "map")
         self.declare_parameter("child_frame", "drone0_base_link")
+        self.declare_parameter("start_enabled", True)
         self.declare_parameter("gravity", 9.80665)
         self.declare_parameter("initial_velocity_variance", 0.04)
         self.declare_parameter(
@@ -61,6 +65,9 @@ class AiImuVelocity(Node):
         self.velocity_topic = str(
             self.get_parameter("velocity_topic").value
         ).strip()
+        self.local_position_topic = str(
+            self.get_parameter("local_position_topic").value
+        ).strip()
         self.parent_frame = str(
             self.get_parameter("parent_frame").value
         ).strip()
@@ -69,6 +76,9 @@ class AiImuVelocity(Node):
         ).strip()
         self.stats_interval = float(
             self.get_parameter("stats_interval").value
+        )
+        self.navigation_enabled = _as_bool(
+            self.get_parameter("start_enabled").value
         )
 
         if not self.corrected_imu_topic or not self.output_topic:
@@ -110,6 +120,21 @@ class AiImuVelocity(Node):
             self._imu_callback,
             qos_profile_sensor_data,
         )
+        self.local_position_subscription = None
+        self.last_local_position_message = None
+        self.last_local_position_time = None
+        if self.local_position_topic:
+            self.local_position_subscription = self.create_subscription(
+                Odometry,
+                self.local_position_topic,
+                self._local_position_callback,
+                qos_profile_sensor_data,
+            )
+        self.enable_service = self.create_service(
+            SetBool,
+            "~/enable_nav",
+            self._enable_nav_callback,
+        )
         self.stats_timer = self.create_timer(
             1.0, self.log_statistics_if_due
         )
@@ -127,8 +152,99 @@ class AiImuVelocity(Node):
         self.get_logger().info(
             f"input={self.corrected_imu_topic}, "
             f"output={self.output_topic}, "
-            f"frame={self.parent_frame}"
+            f"frame={self.parent_frame}, "
+            f"navigation_enabled={self.navigation_enabled}"
         )
+
+    def _local_position_callback(self, message: Odometry):
+        self.last_local_position_message = message
+        self.last_local_position_time = time.monotonic()
+        if (
+            not self.navigation_enabled
+            and self.estimator.initialized
+        ):
+            self._seed_estimator_from_local_position(log_result=False)
+
+    def _enable_nav_callback(
+        self, request: SetBool.Request, response: SetBool.Response
+    ):
+        if request.data:
+            if not self.estimator.initialized:
+                response.success = False
+                response.message = "velocity estimator is not calibrated"
+                return response
+            if not self._seed_estimator_from_local_position():
+                response.success = False
+                response.message = (
+                    "no recent finite PX4 local position/velocity"
+                )
+                return response
+
+        self.navigation_enabled = bool(request.data)
+        response.success = True
+        response.message = (
+            "AI_IMU velocity navigation enabled"
+            if self.navigation_enabled
+            else "AI_IMU velocity navigation disabled"
+        )
+        self.get_logger().warning(response.message)
+        return response
+
+    def _seed_estimator_from_local_position(
+        self, log_result: bool = True
+    ) -> bool:
+        message = self.last_local_position_message
+        received_at = self.last_local_position_time
+        if message is None or received_at is None:
+            return False
+        if time.monotonic() - received_at > 1.0:
+            return False
+
+        pose = message.pose.pose
+        twist = message.twist.twist
+        body_velocity = np.array(
+            [twist.linear.x, twist.linear.y, twist.linear.z],
+            dtype=np.float64,
+        )
+        orientation = np.array(
+            [
+                pose.orientation.x,
+                pose.orientation.y,
+                pose.orientation.z,
+                pose.orientation.w,
+            ],
+            dtype=np.float64,
+        )
+        velocity_variance = np.array(
+            [
+                message.twist.covariance[0],
+                message.twist.covariance[7],
+                message.twist.covariance[14],
+            ],
+            dtype=np.float64,
+        )
+        world_position = np.array(
+            [pose.position.x, pose.position.y, pose.position.z],
+            dtype=np.float64,
+        )
+        if not (
+            np.isfinite(body_velocity).all()
+            and np.isfinite(orientation).all()
+            and np.isfinite(world_position).all()
+        ):
+            return False
+        self.estimator.set_state_from_body_velocity(
+            body_velocity,
+            orientation,
+            velocity_variance,
+            world_position,
+        )
+        if log_result:
+            self.get_logger().info(
+                "Seeded estimator from PX4 state: "
+                f"body_velocity={body_velocity.tolist()}"
+            )
+        return True
 
     def _imu_callback(self, message: Imu):
         acceleration = np.array(
@@ -188,10 +304,11 @@ class AiImuVelocity(Node):
 
         self.samples_received += 1
         self.last_velocity = velocity
-        self._publish_odometry(message.header, velocity, covariance)
         if self.vector_publisher is not None:
             self._publish_vector(message.header, velocity)
-        self.samples_published += 1
+        if self.navigation_enabled:
+            self._publish_odometry(message.header, velocity, covariance)
+            self.samples_published += 1
 
     def _message_stamp(self, source_header):
         if (
@@ -207,19 +324,35 @@ class AiImuVelocity(Node):
         message.header.frame_id = self.parent_frame
         message.child_frame_id = self.child_frame
 
-        for index in (0, 1, 2):
-            setattr(message.pose.pose.position, ("xyz"[index]), math.nan)
-        message.pose.pose.orientation.w = 1.0
+        position = self.estimator.position
+        orientation = self.estimator.orientation
+        message.pose.pose.position.x = float(position[0])
+        message.pose.pose.position.y = float(position[1])
+        message.pose.pose.position.z = float(position[2])
+        message.pose.pose.orientation.x = float(orientation[0])
+        message.pose.pose.orientation.y = float(orientation[1])
+        message.pose.pose.orientation.z = float(orientation[2])
+        message.pose.pose.orientation.w = float(orientation[3])
+
+        # PX4's external-vision buffer rejects non-finite pose samples and
+        # restarts position fusion when VIO and AI velocity are interleaved.
+        # Keep a finite dead-reckoned pose with large covariance so position
+        # fusion remains continuous while EKF2 mostly follows velocity.
         for index in (0, 7, 14, 21, 28, 35):
             message.pose.covariance[index] = 1.0e6
 
-        message.twist.twist.linear.x = float(velocity[0])
-        message.twist.twist.linear.y = float(velocity[1])
-        message.twist.twist.linear.z = float(velocity[2])
-        for index in range(3):
-            message.twist.covariance[index * 4] = float(
-                covariance[index, index]
-            )
+        body_velocity = self.estimator.world_to_body_velocity(velocity)
+        body_covariance = self.estimator.world_to_body_covariance(
+            covariance
+        )
+        message.twist.twist.linear.x = float(body_velocity[0])
+        message.twist.twist.linear.y = float(body_velocity[1])
+        message.twist.twist.linear.z = float(body_velocity[2])
+        for row in range(3):
+            for column in range(3):
+                message.twist.covariance[row * 6 + column] = float(
+                    body_covariance[row, column]
+                )
         for index in (21, 28, 35):
             message.twist.covariance[index] = 1.0e6
 

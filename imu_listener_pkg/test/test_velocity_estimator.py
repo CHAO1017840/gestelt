@@ -76,6 +76,69 @@ class StrapdownVelocityEstimatorTest(unittest.TestCase):
             atol=1.0e-6,
         )
 
+    def test_seed_state_rotates_body_velocity_to_world(self):
+        estimator = StrapdownVelocityEstimator(initialization_samples=0)
+        yaw_90 = np.array(
+            [0.0, 0.0, np.sqrt(0.5), np.sqrt(0.5)]
+        )
+
+        estimator.set_state_from_body_velocity(
+            np.array([1.0, 0.0, 0.0]),
+            yaw_90,
+        )
+
+        np.testing.assert_allclose(
+            estimator.velocity,
+            np.array([0.0, 1.0, 0.0]),
+            atol=1.0e-10,
+        )
+        np.testing.assert_allclose(
+            estimator.world_to_body_velocity(estimator.velocity),
+            np.array([1.0, 0.0, 0.0]),
+            atol=1.0e-10,
+        )
+
+    def test_world_to_body_covariance_preserves_variance_trace(self):
+        estimator = StrapdownVelocityEstimator(initialization_samples=0)
+        estimator.set_state_from_body_velocity(
+            np.zeros(3),
+            np.array(
+                [0.0, 0.0, np.sqrt(0.5), np.sqrt(0.5)]
+            ),
+        )
+        world_covariance = np.diag([1.0, 2.0, 3.0])
+
+        body_covariance = estimator.world_to_body_covariance(
+            world_covariance
+        )
+
+        np.testing.assert_allclose(
+            body_covariance,
+            np.diag([2.0, 1.0, 3.0]),
+            atol=1.0e-10,
+        )
+
+    def test_velocity_integration_updates_position(self):
+        estimator = StrapdownVelocityEstimator(
+            gravity=9.81007, initialization_samples=0
+        )
+        acceleration = np.array([1.0, 0.0, 9.81007])
+        angular_velocity = np.zeros(3)
+
+        for index in range(201):
+            estimator.update(
+                acceleration,
+                angular_velocity,
+                index * 0.005,
+            )
+
+        expected_position = 0.5 * 1.0 * (200 * 0.005) ** 2
+        np.testing.assert_allclose(
+            estimator.position,
+            np.array([expected_position, 0.0, 0.0]),
+            atol=1.0e-5,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

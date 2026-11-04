@@ -22,7 +22,8 @@ AI_IMU 模型输出：
 
 最终只向 PX4 提供速度观测，不提供可信位置。
 
-因此这是“速度-only 外部导航”，不是完整 VIO。
+因此这是“AI 速度 + 速度积分位置”的外部导航，不是带绝对位置
+观测的完整 VIO。
 长期运行会漂移，不能直接用于未经测试的实机自主飞行。
 
 
@@ -257,12 +258,17 @@ EKF2_HGT_REF 是重启生效参数。保存参数后应重启 PX4。
 
 Odometry 中：
 
-  pose.position 为 NaN
+  pose.position 是 AI 速度积分位置；启用接管时从当前 PX4 本地位置开始
   pose.covariance 很大
   twist.twist.linear 是有效速度
   twist.covariance 是速度协方差
 
-这意味着 PX4 只能使用速度，不应把 pose 当成位置。
+位置协方差达到 1e6，位置主要依靠连续预测和 AI 速度积分。
+有限的 pose.position 用于保持 PX4 外部视觉位置源连续，不会在 VIO
+消失后立即判定位置失效并切 ALTCTL。
+不要把 pose.position 写成 NaN。VIO 和 AI 速度同时启用时，
+NaN 会让 EKF2 在两条 ODOMETRY 消息之间反复停止和重启位置融合，
+表现为 xy_reset_counter、z_reset_counter 高速增长。
 
 
 九、检查 MAVROS 和 PX4
@@ -297,11 +303,11 @@ Odometry 中：
 目标流程：
 
   VIO/GPS 正常
-    -> AI_IMU 节点从启动开始直接发布速度
-    -> VIO 和 AI 速度同时输入 PX4
+    -> AI_IMU 节点热待命
     -> 正常起飞
+    -> 手动启用 AI 位置和速度接管
     -> 注入 VIO/GPS 失效
-    -> 保持 AI 速度观测
+    -> AI 继续提供位置和速度
     -> 观察 EKF2
     -> 短时间测试后主动降落
 
@@ -311,9 +317,8 @@ Odometry 中：
 
   use_ai_imu_velocity:=true
     -> 自动启动 ai_imu_velocity.py
-    -> 从启动开始直接发布 /drone0/mavros/odometry/out
-    -> MAVROS 将速度转换成 MAVLink ODOMETRY
-    -> PX4 与 VIO 一起融合
+    -> 默认热待命，不向 PX4 发布 ODOMETRY
+    -> 接管后直接发布位置和速度
 
 不能同时设置：
 
@@ -323,9 +328,8 @@ Odometry 中：
 
 直接输入模式的风险：
 
-  AI 速度在起飞前就已经进入 PX4 EKF2。
-  如果 AI 速度在静止时漂移，会直接导致预飞失败。
-  因此启动后必须先完成静止校准，并确认速度接近零。
+  AI 速度在待命阶段不进入 PX4 EKF2，因此不会造成预飞速度错误。
+  启用接管的瞬间会用 PX4 当前本地位置、速度和姿态重置积分器。
 
 
 10.1 直接输入模式启动流程
@@ -340,7 +344,7 @@ Odometry 中：
   在 PX4 pxh> 执行：
     param set EKF2_EV_CTRL 15
     param set EKF2_GPS_CTRL 0
-    param set EKF2_HGT_REF 3
+    param set EKF2_HGT_REF 0
     param save
 
   EKF2_EV_CTRL=15 表示外部视觉同时使用：
@@ -349,7 +353,10 @@ Odometry 中：
     - 3D 速度
     - yaw
 
-  VIO 提供位置和高度，AI_IMU 提供速度。
+  VIO 提供位置，AI_IMU 提供速度。
+
+  EKF2_HGT_REF=0 让气压计成为高度参考。
+  VIO 高度仍可作为辅助观测；VIO 失效后，气压计继续维持高度。
 
 第三步：启动 Gestelt、VIO、MAVROS 和 AI 速度节点。
 
@@ -365,10 +372,16 @@ Odometry 中：
     use_mavros:=true \
     use_ai_imu:=true \
     use_ai_imu_velocity:=true \
+    ai_imu_velocity_start_enabled:=false \
     enforce_gps_off:=true
 
 启动后，不要另外运行 ai_imu_velocity.py。
 use_ai_imu_velocity:=true 已经会自动启动该节点。
+
+  ai_imu_velocity_start_enabled:=false
+    表示 AI 速度节点先热待命，只发布 /drone0/ai_imu/velocity，
+    暂时不向 PX4 发布 /mavros/odometry/out。
+    待命期间会用正常 PX4 本地速度和姿态持续校正积分状态。
 
 必须在起飞前保持静止。
 等待 AI 速度节点日志出现：
@@ -476,8 +489,8 @@ use_ai_imu_velocity:=true 已经会自动启动该节点。
   param2=1     off
   param2=0     ok
 
-断开 VIO 后，PX4 应继续使用 AI 外部速度。
-如果 AI 速度没有被 EKF2 接受，PX4 会触发失效保护并盲降。
+断开 VIO 后，PX4 应继续使用 AI 积分位置和外部速度。
+如果 AI 数据没有被 EKF2 接受，PX4 仍会触发失效保护。
 
 
 10.3 断开 VIO 后的观察与结束
@@ -492,7 +505,11 @@ use_ai_imu_velocity:=true 已经会自动启动该节点。
      cs_ev_vel: True
      cs_inertial_dead_reckoning: False
 
-2. 悬停中断开 VIO
+2. 先启用 AI 位置/速度接管
+   ros2 service call /drone0/ai_imu_velocity/enable_nav \
+     std_srvs/srv/SetBool "{data: true}"
+
+   然后再断开 VIO：
    failure vio off
 
 3. 断开后立即检查
@@ -500,18 +517,29 @@ use_ai_imu_velocity:=true 已经会自动启动该节点。
    listener vehicle_local_position
 
    预期变化：
-     cs_ev_pos: False
-     cs_ev_hgt: False
+     cs_ev_pos: True
+     cs_ev_hgt: True
      cs_ev_vel: True
+     cs_baro_hgt: True
 
-   如果 PX4 只能使用 AI 速度，水平位置会进入惯性推算，
-   因此 dead_reckoning 可能变为 True，位置会逐渐漂移。
+   此时位置来自 AI 速度积分，因此会逐渐漂移。
+   恢复 VIO 前先停止 AI 导航输出；否则 AI 和 VIO 的位置参考
+   不一致，重新恢复 VIO 时可能发生位置跳变。
+
+   AI_IMU 接管的是 VIO 的位置和速度数据流，但其位置是推算值，
+   不是绝对观测。因此可以继续位置控制，但长时间后仍会漂移。
+   需要长期稳定自主导航时，必须增加光流、测距、GPS 或其他
+   绝对位置观测。
 
 4. 检查 AI 速度是否继续发布
    ros2 topic hz /drone0/mavros/odometry/out
    ros2 topic echo --once \
      /drone0/mavros/odometry/out \
      --field twist.twist.linear
+
+   恢复 VIO 前先停止 AI 速度导航输出：
+     ros2 service call /drone0/ai_imu_velocity/enable_nav \
+       std_srvs/srv/SetBool "{data: false}"
 
 5. 检查 PX4 是否进入保护
    如果出现：

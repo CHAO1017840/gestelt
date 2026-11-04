@@ -36,27 +36,12 @@ param set-default PWM_MAIN_FUNC4 104
 # EKF2: external vision position and velocity, no GPS
 param set-default EKF2_EV_DELAY 5
 param set-default EKF2_EV_CTRL 15
-param set-default EKF2_HGT_REF 3
+param set-default EKF2_HGT_REF 0
 param set-default EKF2_GPS_CTRL 0
 param set-default ATT_EXT_HDG_M 1
 
-# SITL-specific rate gains. The real-aircraft gains make this low-inertia
-# Gazebo model oscillate around 8 Hz because its motors respond much faster
-# than the physical vehicle. These gains were verified with hover and waypoints.
-param set-default MC_ROLLRATE_P 0.02
-param set-default MC_ROLLRATE_I 0.02
-param set-default MC_ROLLRATE_D 0.0
-param set-default MC_PITCHRATE_P 0.02
-param set-default MC_PITCHRATE_I 0.02
-param set-default MC_PITCHRATE_D 0.0
-param set-default MC_YAWRATE_P 0.2
-param set-default MC_YAWRATE_I 0.1
-param set-default MC_YAWRATE_D 0.0
-
-param set-default MC_ROLL_P 6.0
-param set-default MC_PITCH_P 5.0
-param set-default MC_YAW_P 2.8
-
+# Attitude PID parameters intentionally come from the local PX4 parameter
+# store so this airframe does not overwrite the user's tuned values.
 param set-default MPC_THR_HOVER 0.3
 param set-default MPC_THR_MIN 0.12
 param set-default MPC_XY_P 2.2

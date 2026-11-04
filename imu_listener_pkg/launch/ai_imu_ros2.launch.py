@@ -88,6 +88,19 @@ def generate_launch_description():
             description="Velocity-only nav_msgs/Odometry output topic.",
         ),
         DeclareLaunchArgument(
+            "velocity_start_enabled",
+            default_value="true",
+            description=(
+                "Publish AI velocity to PX4 immediately. Set false for "
+                "manual failover through the enable_nav service."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "velocity_local_position_topic",
+            default_value="mavros/local_position/odom",
+            description="PX4 local odometry used to seed failover state.",
+        ),
+        DeclareLaunchArgument(
             "velocity_vector_topic",
             default_value="ai_imu/velocity",
             description=(
@@ -162,6 +175,9 @@ def generate_launch_description():
             "velocity_topic": LaunchConfiguration(
                 "velocity_vector_topic"
             ),
+            "local_position_topic": LaunchConfiguration(
+                "velocity_local_position_topic"
+            ),
             "parent_frame": LaunchConfiguration(
                 "velocity_parent_frame"
             ),
@@ -176,6 +192,9 @@ def generate_launch_description():
             ),
             "initialization_samples": LaunchConfiguration(
                 "velocity_initialization_samples"
+            ),
+            "start_enabled": LaunchConfiguration(
+                "velocity_start_enabled"
             ),
         }],
         condition=IfCondition(

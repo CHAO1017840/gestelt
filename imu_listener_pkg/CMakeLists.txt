@@ -7,6 +7,7 @@ find_package(nav_msgs REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(ai_msgs REQUIRED)
 
 install(PROGRAMS
@@ -52,6 +53,7 @@ ament_export_dependencies(
   rclpy
   sensor_msgs
   std_msgs
+  std_srvs
   ai_msgs
 )
 ament_package()
