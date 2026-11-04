@@ -1,46 +1,25 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.8)
 project(swarm_collision_checker)
 
-set(CMAKE_BUILD_TYPE "Release")
-add_compile_options(-std=c++17)
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
-
-
-set(ROS_LIBRARIES
-  roscpp
-  std_msgs
-  geometry_msgs
-  visualization_msgs
-) 
-
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(catkin REQUIRED COMPONENTS
-  ${ROS_LIBRARIES}
+find_package(gestelt_compat REQUIRED)
+
+add_executable(${PROJECT_NAME}_node
+  src/swarm_collision_checker.cpp
+  src/swarm_collision_checker_node.cpp
+)
+target_include_directories(${PROJECT_NAME}_node PRIVATE include)
+target_compile_features(${PROJECT_NAME}_node PRIVATE cxx_std_17)
+target_link_libraries(${PROJECT_NAME}_node PRIVATE
+  gestelt_compat::gestelt_compat
+  rclcpp::rclcpp
+  Eigen3::Eigen
 )
 
-catkin_package(
- INCLUDE_DIRS include
-#  LIBRARIES swarm_collision_checker # Exported libraries
-#  CATKIN_DEPENDS  # Export grid_map as part of this package
-#  DEPENDS 
-)
-
-include_directories(
-  include
-  SYSTEM
-  ${catkin_INCLUDE_DIRS} 
-  ${PROJECT_SOURCE_DIR}/include
-  ${EIGEN3_INCLUDE_DIR}
-)
-
-add_executable(swarm_collision_checker_node
-  src/swarm_collision_checker.cpp 
-  src/swarm_collision_checker_node.cpp 
-)
-
-target_link_libraries(swarm_collision_checker_node 
-  ${catkin_LIBRARIES}
-)
-
-
-
+install(DIRECTORY include/ DESTINATION include)
+install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+install(TARGETS ${PROJECT_NAME}_node DESTINATION lib/${PROJECT_NAME})
+ament_export_dependencies(rclcpp Eigen3 gestelt_compat)
+ament_package()

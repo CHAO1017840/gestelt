@@ -5,22 +5,22 @@
 
 #include <Eigen/Eigen>
 
-#include <ros/ros.h>
-#include <std_msgs/Empty.h>
-#include <std_msgs/Float64.h>
-#include <std_msgs/String.h>
-#include <geometry_msgs/PoseStamped.h>
+#include <gestelt_ros2_compat/ros.hpp>
+#include <std_msgs/msg/empty.hpp>
+#include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/string.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 
-#include <traj_utils/PolyTraj.h>
-#include <traj_utils/MINCOTraj.h>
+#include <traj_utils/msg/poly_traj.hpp>
+#include <traj_utils/msg/minco_traj.hpp>
 
 #include <ego_planner_fsm/ego_planner_manager.h>
 
 #include <tf2_ros/transform_listener.h>
 // #include <swarm_benchmark/timebenchmark.h>
 
-#include <gestelt_msgs/Goals.h>
-// #include <gestelt_msgs/TimeBenchmark.h>
+#include <gestelt_msgs/msg/goals.hpp>
+// #include <gestelt_msgs/msg/timebenchmark.hpp>
 
 using std::vector;
 
@@ -416,13 +416,13 @@ private:
 
   void mandatoryStopCallback(const std_msgs::Empty &msg);
   void odometryCallback(const nav_msgs::OdometryConstPtr &msg);
-  void RecvBroadcastMINCOTrajCallback(const traj_utils::MINCOTrajConstPtr &msg);
+  void RecvBroadcastMINCOTrajCallback(const std::shared_ptr<const traj_utils::msg::MINCOTraj> &msg);
   
   /* Helper methods */
-  void polyTraj2ROSMsg(traj_utils::PolyTraj &poly_msg, traj_utils::MINCOTraj &MINCO_msg);
+  void polyTraj2ROSMsg(traj_utils::msg::PolyTraj &poly_msg, traj_utils::msg::MINCOTraj &MINCO_msg);
 
   // Transform the trajectory from UAV frame to world frame
-  void transformMINCOFromOriginToWorld(traj_utils::MINCOTraj & MINCO_msg){
+  void transformMINCOFromOriginToWorld(traj_utils::msg::MINCOTraj & MINCO_msg){
 
     MINCO_msg.start_p[0] += uav_origin_to_world_tf_(0);
     MINCO_msg.start_p[1] += uav_origin_to_world_tf_(1);
@@ -442,7 +442,7 @@ private:
   }
 
   // Transform the trajectory from world frame to UAV frame
-  void transformMINCOFromWorldToOrigin(traj_utils::MINCOTraj & MINCO_msg){
+  void transformMINCOFromWorldToOrigin(traj_utils::msg::MINCOTraj & MINCO_msg){
     
     MINCO_msg.start_p[0] += world_to_uav_origin_tf_(0);
     MINCO_msg.start_p[1] += world_to_uav_origin_tf_(1);

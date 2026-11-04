@@ -1,59 +1,51 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.8)
 project(traj_utils)
 
-set(CMAKE_BUILD_TYPE "Release")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
-
-# set(ENABLE_PRECOMPILED_HEADERS "OFF")
-add_compile_options(-std=c++17)
-
-set(ROS_LIBRARIES
-  roscpp
-  message_generation
-)
-
-set(MSG_DEP
-  std_msgs
-  geometry_msgs
-)
-
+find_package(ament_cmake REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(catkin REQUIRED COMPONENTS
-  ${ROS_LIBRARIES} ${MSG_DEP}
+find_package(gestelt_compat REQUIRED)
+
+rosidl_generate_interfaces(
+  ${PROJECT_NAME}
+  msg/DataDisp.msg
+  msg/PolyTraj.msg
+  msg/MINCOTraj.msg
+  DEPENDENCIES std_msgs geometry_msgs builtin_interfaces
 )
 
-# Generate messages in the 'msg' folder
-add_message_files(
-  FILES
-  DataDisp.msg
-  PolyTraj.msg
-  MINCOTraj.msg
+add_library(${PROJECT_NAME}_lib SHARED src/planning_visualization.cpp)
+set_target_properties(${PROJECT_NAME}_lib PROPERTIES EXPORT_NAME ${PROJECT_NAME})
+target_include_directories(${PROJECT_NAME}_lib PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
 )
-  
-# Generate added messages and services with any dependencies listed here
-generate_messages(
-  DEPENDENCIES
-    ${MSG_DEP}
-)
-
-catkin_package(
-  INCLUDE_DIRS include
-  LIBRARIES traj_utils 
-  CATKIN_DEPENDS message_runtime
-  #  DEPENDS system_lib
+target_compile_features(${PROJECT_NAME}_lib PUBLIC cxx_std_17)
+target_link_libraries(${PROJECT_NAME}_lib PUBLIC
+  gestelt_compat::gestelt_compat
+  ${PROJECT_NAME}__rosidl_typesupport_cpp
+  Eigen3::Eigen
 )
 
-include_directories( 
-    SYSTEM 
-    include 
-    ${catkin_INCLUDE_DIRS}
-    ${EIGEN3_INCLUDE_DIRS} 
+install(
+  DIRECTORY include/
+  DESTINATION include
 )
-
-add_library( traj_utils
-    src/planning_visualization.cpp 
+install(
+  TARGETS ${PROJECT_NAME}_lib
+  EXPORT ${PROJECT_NAME}Targets
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin
 )
-target_link_libraries( traj_utils
-    ${catkin_LIBRARIES} 
-    # ${EIGEN3_LIBRARIES}
-)  
+ament_export_targets(${PROJECT_NAME}Targets HAS_LIBRARY_TARGET NAMESPACE ${PROJECT_NAME}::)
+ament_export_dependencies(
+  rclcpp std_msgs geometry_msgs visualization_msgs builtin_interfaces
+  rosidl_default_runtime gestelt_compat
+)
+ament_package()

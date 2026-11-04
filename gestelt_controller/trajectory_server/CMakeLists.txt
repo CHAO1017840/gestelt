@@ -1,52 +1,24 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.8)
 project(trajectory_server)
 
-set(CMAKE_BUILD_TYPE "Release")
-add_compile_options(-std=c++17)
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
-
-
-set(ROS_LIBRARIES
-  roscpp
-  std_msgs
-  geometry_msgs
-  mavros_msgs
-  gestelt_msgs
-)
-
-# set(ROS_DEPENDS
-# )
-
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(mavros_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(catkin REQUIRED COMPONENTS
-  ${ROS_LIBRARIES}
+find_package(gestelt_compat REQUIRED)
+find_package(gestelt_msgs REQUIRED)
+
+add_executable(traj_server_node src/traj_server_node.cpp src/traj_server.cpp)
+target_include_directories(traj_server_node PRIVATE include)
+target_compile_features(traj_server_node PRIVATE cxx_std_17)
+target_link_libraries(traj_server_node PRIVATE
+  gestelt_compat::gestelt_compat
+  gestelt_msgs::gestelt_msgs
+  rclcpp::rclcpp
+  ${mavros_msgs_TARGETS}
+  Eigen3::Eigen
 )
 
-catkin_package(
- INCLUDE_DIRS include
- LIBRARIES trajectory_server
-#  CATKIN_DEPENDS ${ROS_DEPENDS}
-#  DEPENDS system_lib
-)
-
-include_directories(
-  include
-  SYSTEM
-  ${catkin_INCLUDE_DIRS} 
-  ${PROJECT_SOURCE_DIR}/include
-  ${EIGEN3_INCLUDE_DIR}
-)
-
-add_executable(traj_server_node 
-  src/traj_server_node.cpp
-  src/traj_server.cpp
-)
-target_link_libraries(traj_server_node 
-  ${catkin_LIBRARIES}
-  ${EIGEN3_LIBRARIES}
-)
-# add_dependencies(traj_server ${${PROJECT_NAME}_EXPORTED_TARGETS})
-
-
-
-
+install(TARGETS traj_server_node DESTINATION lib/${PROJECT_NAME})
+ament_export_dependencies(rclcpp mavros_msgs Eigen3 gestelt_compat gestelt_msgs)
+ament_package()

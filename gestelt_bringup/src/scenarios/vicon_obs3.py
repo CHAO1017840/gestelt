@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import rospy
+import gestelt_py_compat.rospy_compat as rospy
 from gestelt_msgs.msg import Command, CommanderState, Goals
 from geometry_msgs.msg import Transform, PoseStamped
 from std_msgs.msg import Int32, Int8
@@ -78,10 +78,10 @@ def create_transform(x, y, z):
     pos.translation.y = y
     pos.translation.z = z
 
-    pos.rotation.x = 0
-    pos.rotation.y = 0
-    pos.rotation.z = 0
-    pos.rotation.w = 1
+    pos.rotation.x = 0.0
+    pos.rotation.y = 0.0
+    pos.rotation.z = 0.0
+    pos.rotation.w = 1.0
 
     return pos
 
@@ -91,10 +91,10 @@ def create_pose(x, y, z):
     pos.pose.position.y = y
     pos.pose.position.z = z
 
-    pos.pose.orientation.x = 0
-    pos.pose.orientation.y = 0
-    pos.pose.orientation.z = 0
-    pos.pose.orientation.w = 0
+    pos.pose.orientation.x = 0.0
+    pos.pose.orientation.y = 0.0
+    pos.pose.orientation.z = 0.0
+    pos.pose.orientation.w = 0.0
 
     return pos
 
@@ -111,6 +111,8 @@ def pub_goals(goals, task_id=0):
 
         goal_publishers[i].publish(goals_msg)
 
+    rospy.sleep(0.5)
+
     return True
     
 
@@ -126,7 +128,7 @@ def main():
         # Take off 
         while not rospy.is_shutdown():
             get_server_state_callback()
-            if check_traj_server_states("HOVER"):
+            if check_traj_server_states("HOVER") or check_traj_server_states("MISSION"):
                 break
             publish_server_cmd(0)
             print("tick!")

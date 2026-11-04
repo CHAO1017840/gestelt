@@ -1,7 +1,7 @@
 #ifndef _LOGGER_H_
 #define _LOGGER_H_
 
-#include <ros/ros.h>
+#include <gestelt_ros2_compat/ros.hpp>
 
 template<typename ... Args>
 std::string StringFmt( const std::string& format, Args ... args )

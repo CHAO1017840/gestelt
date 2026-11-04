@@ -13,9 +13,9 @@
 #include <queue>
 #include <chrono>
 
-#include <ros/ros.h>
-#include <visualization_msgs/Marker.h>
-#include <visualization_msgs/MarkerArray.h>
+#include <gestelt_ros2_compat/ros.hpp>
+#include <visualization_msgs/msg/marker.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 class SphericalSFC : public SFCBase
 {

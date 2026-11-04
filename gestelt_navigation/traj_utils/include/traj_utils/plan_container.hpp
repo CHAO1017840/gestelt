@@ -3,7 +3,7 @@
 
 #include <Eigen/Eigen>
 #include <vector>
-#include <ros/ros.h>
+#include <gestelt_ros2_compat/ros.hpp>
 
 #include <optimizer/poly_traj_utils.hpp>
 

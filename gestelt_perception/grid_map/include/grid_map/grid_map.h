@@ -11,16 +11,16 @@
 
 #include <ikd_tree/ikd_tree.h>
 
-#include <ros/ros.h>
+#include <gestelt_ros2_compat/ros.hpp>
 
 #include <message_filters/subscriber.h>
 #include <message_filters/sync_policies/approximate_time.h>
 #include <message_filters/synchronizer.h>
 
-#include <geometry_msgs/PoseStamped.h>
-#include <nav_msgs/Odometry.h>
-#include <sensor_msgs/CameraInfo.h>
-#include <visualization_msgs/Marker.h>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
+#include <visualization_msgs/msg/marker.hpp>
 
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/message_filter.h>
@@ -31,8 +31,8 @@
 
 /* For debugging */
 #include <logger/timer.h>
-#include <geometry_msgs/PolygonStamped.h>
-#include <geometry_msgs/Point32.h>
+#include <geometry_msgs/msg/polygon_stamped.hpp>
+#include <geometry_msgs/msg/point32.hpp>
 
 ///Pre-allocated std::vector for Eigen using vec_E
 template <typename T>
@@ -73,6 +73,7 @@ struct MappingParameters
   int pose_type_;       // Type of pose input (pose, odom or TF)
 
   double pose_timeout_; // Timeout for pose update before emergency stop is activated
+  double sensor_timeout_{1.0}; // Timeout for sensor messages [s]
 
   double max_range;
 
@@ -307,7 +308,7 @@ private:
   // ros::Timer build_kd_tree_timer_; // Timer for updating local map
 
   // TF transformation 
-  tf2_ros::Buffer tfBuffer_;
+  std::shared_ptr<tf2_ros::Buffer> tfBuffer_;
   std::shared_ptr<tf2_ros::TransformListener> tfListener_;
 
   /* Params */

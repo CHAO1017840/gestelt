@@ -25,8 +25,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "ros/ros.h"
-#include "std_msgs/String.h"
+#include <gestelt_ros2_compat/ros.hpp>
+#include <std_msgs/msg/string.hpp>
 
 #include <sstream>
 

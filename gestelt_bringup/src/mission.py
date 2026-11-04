@@ -1,140 +1,83 @@
 #!/usr/bin/env python3
-import numpy as np
-import rospy
-from gestelt_msgs.msg import CommanderState, Goals, CommanderCommand
-from geometry_msgs.msg import Pose, Accel,PoseArray,AccelStamped
-from std_msgs.msg import Int8
-import math
-# Publisher of server events to trigger change of states for trajectory server 
-server_event_pub = rospy.Publisher('/traj_server/command', CommanderCommand, queue_size=10)
-# Publisher of server events to trigger change of states for trajectory server 
-waypoints_pub = rospy.Publisher('/planner/goals', Goals, queue_size=10)
+"""Single-drone ROS 2 mission template."""
 
-# for visualization
-waypoints_pos_pub = rospy.Publisher('/planner/goals_pos', PoseArray, queue_size=10)
-waypoints_acc_pub = rospy.Publisher('/planner/goals_acc', AccelStamped, queue_size=10)
-# Dictionary of UAV states
-server_states = {}
+import gestelt_py_compat.rospy_compat as rospy
+from geometry_msgs.msg import Transform
+from gestelt_msgs.msg import Command, CommanderState, Goals
 
-# Check if UAV has achived desired traj_server_state
-def check_traj_server_states(des_traj_server_state):
-    if len(server_states.items()) == 0:
-        print("No Server states received!")
-        return False
-    
-    for server_state in server_states.items():
-        # print(f"{server_state[0]}: {des_traj_server_state}")
-        if server_state[1].traj_server_state != des_traj_server_state:
-            return False
-    return True
 
-def publishCommand(event_enum):
-    commander_cmd = CommanderCommand()
-    commander_cmd.command = event_enum
+NUM_DRONES = 1
+ROUTE = [(3.0, 2.0, 3.0), (5.0, 2.0, 3.0)]
 
-    server_event_pub.publish(commander_cmd)
 
-def get_server_state_callback():
-    msg = rospy.wait_for_message(f"/traj_server/state", CommanderState, timeout=5.0)
-    server_states[str(msg.drone_id)] = msg
-    # print("==================")
-    # print(msg)
-    # print("==================")
+def create_transform(x, y, z):
+    transform = Transform()
+    transform.translation.x = float(x)
+    transform.translation.y = float(y)
+    transform.translation.z = float(z)
+    transform.rotation.w = 1.0
+    return transform
 
-def create_pose(x, y, z):
-    pose = Pose()
-    pose.position.x = x
-    pose.position.y = y
-    pose.position.z = z
 
-    pose.orientation.x = 0
-    pose.orientation.y = 0
-    pose.orientation.z = 0
-    pose.orientation.w = 1
+def read_states():
+    states = {}
+    for drone_id in range(NUM_DRONES):
+        states[drone_id] = rospy.wait_for_message(
+            f"/drone{drone_id}/traj_server/state",
+            CommanderState,
+            timeout=5.0,
+        )
+    return states
 
-    return pose
-def create_accel(acc_x,acc_y,acc_z):
-    acc = Accel()
-    acc.linear.x = acc_x
-    acc.linear.y = acc_y
-    acc.linear.z = acc_z
-    
-    return acc
 
-def pub_waypoints(waypoints,accels):
-    wp_msg = Goals()
-    wp_pos_msg=PoseArray()
-    wp_acc_msg=AccelStamped()
-    
-    wp_msg.header.frame_id = "world"
-    # wp_msg.waypoints.header.frame_id = "world"
-    wp_pos_msg.header.frame_id = "world"
-    wp_acc_msg.header.frame_id = "world"
+def publish_command(command):
+    for drone_id in range(NUM_DRONES):
+        publisher = rospy.Publisher(
+            f"/drone{drone_id}/traj_server/command",
+            Command,
+            queue_size=5,
+        )
+        message = Command()
+        message.command = command
+        publisher.publish(message)
 
-    wp_msg.waypoints = waypoints
-    wp_pos_msg.poses = waypoints
-    wp_acc_msg.accel=accels[0]
 
-    wp_msg.accelerations= accels
-    waypoints_pub.publish(wp_msg)
-    waypoints_pos_pub.publish(wp_pos_msg)
-    waypoints_acc_pub.publish(wp_acc_msg)
+def publish_goals(route):
+    for drone_id in range(NUM_DRONES):
+        publisher = rospy.Publisher(
+            f"/drone{drone_id}/planner_adaptor/goals",
+            Goals,
+            queue_size=2,
+        )
+        message = Goals()
+        message.header.frame_id = "world"
+        message.transforms = [
+            create_transform(x, y, z) for x, y, z in route
+        ]
+        publisher.publish(message)
+    rospy.sleep(0.5)
+
+
 def main():
-    rospy.init_node('mission_startup', anonymous=True)
-    rate = rospy.Rate(5) # 20hz
-
-    HOVER_MODE = False
-    MISSION_MODE = False
+    rospy.init_node("mission_startup", anonymous=True)
+    rate = rospy.Rate(5)
 
     while not rospy.is_shutdown():
-        get_server_state_callback()
-
-        if check_traj_server_states("MISSION"):
-            MISSION_MODE = True
-        if check_traj_server_states("HOVER"):
-            HOVER_MODE = True
-        
-        if (MISSION_MODE):
-            # Already in MISSION 
+        states = read_states()
+        if all(state.traj_server_state == "MISSION" for state in states.values()):
             break
-        elif (not HOVER_MODE):
-            # IDLE -> TAKE OFF -> HOVER
-            print("Setting to HOVER mode!")
-            publishCommand(CommanderCommand.TAKEOFF)
-        elif (HOVER_MODE):
-            # HOVER -> MISSION
-            print("Setting to MISSION mode!")
-            publishCommand(CommanderCommand.MISSION)
-
-        print("tick!")
+        if all(
+            state.traj_server_state in ("HOVER", "MISSION")
+            for state in states.values()
+        ):
+            publish_command(Command.MISSION)
+        else:
+            publish_command(Command.TAKEOFF)
         rate.sleep()
 
-    # Send waypoints to UAVs
-    # frame is ENU
-    print(f"Sending waypoints to UAVs")
-    gate_center=[3.0,2.0,3.0]   
-    waypoints = []
-    waypoints.append(create_pose(gate_center[0],gate_center[1],gate_center[2]))
-    waypoints.append(create_pose(gate_center[0]+2,gate_center[1],gate_center[2]))
-    # waypoints.append(create_pose(1.0, -6.0, 4.0))
-    
-    # the number of accelerations must be equal to the number of waypoints
-    accel_list = []
-    
-    g=-9.81 #m/s^2
-    f=0.3*(-g) #N
-    angle=30
-    
-    angle_rad=math.radians(angle)
+    print("Sending waypoints to UAVs")
+    publish_goals(ROUTE)
 
-    
-    # frame need to verify
-    accel_list.append(create_accel(0.0,-f*np.sin(angle_rad),g+f*np.cos(angle_rad)))
-    # accel_list.append(create_accel(0.0,-10*g,g))
-    accel_list.append(create_accel(0.0,0.0,0.0))
-    # accel_list.append(create_accel(0.0,0.0,0.0))
 
-    pub_waypoints(waypoints,accel_list)
-    rospy.spin()
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -1,5 +1,28 @@
 # File Hierarchy 
 
+## ROS 2 Humble
+
+Use the ROS 2 launch entry point from the workspace root:
+
+```bash
+ros2 launch gestelt_bringup scenario_ros2.launch.py \
+  scenario:=empty_map run_mission:=true use_rviz:=false
+```
+
+The XML launch files below are retained as ROS 1 reference material. The ROS 2
+launch file dynamically creates namespaced nodes for every drone.
+
+Gazebo Classic and the ROS 2 RViz configuration can be started together:
+
+```bash
+ros2 launch gestelt_bringup scenario_ros2.launch.py \
+  scenario:=forest_single use_gazebo:=true use_rviz:=true
+```
+
+Use `rviz_config:=gestelt_ros2.rviz` to select the bundled ROS 2 visualization
+configuration. The Gazebo model is display-only until the PX4 SITL path is
+ported and validated.
+
 ## Launch files
 
 - fake_drone: For simulated drones (without dynamics)

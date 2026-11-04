@@ -25,10 +25,10 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "ros/ros.h"
-#include "std_msgs/String.h"
+#include <gestelt_ros2_compat/ros.hpp>
+#include <std_msgs/msg/string.hpp>
 
-void chatterCallback(const std_msgs::String::ConstPtr& msg)
+void chatterCallback(const std_msgs::String::ConstSharedPtr& msg)
 {
   ROS_INFO("I heard: [%s]", msg->data.c_str());
 }
@@ -39,7 +39,8 @@ int main(int argc, char **argv)
 
   ros::NodeHandle n;
 
-  ros::Subscriber sub = n.subscribe("chatter", 1000, chatterCallback);
+  ros::Subscriber sub = n.subscribe<std_msgs::String>(
+    "chatter", 1000, chatterCallback);
   
   ros::spin();
 

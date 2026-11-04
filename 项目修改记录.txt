@@ -1,0 +1,144 @@
+Gestelt 项目修改记录
+====================
+更新时间：2026-10-24
+目标环境：Ubuntu 22.04 + ROS 2 Humble + PX4 SITL
+
+
+一、构建系统迁移
+----------------
+1. 从 ROS 1 catkin 改为 ROS 2 colcon + ament_cmake。
+2. 更新各包 CMakeLists.txt 和 package.xml。
+3. 更新消息生成方式、依赖声明和可执行文件安装规则。
+4. 当前 28 个 ROS 2 包均可通过 colcon build 编译。
+
+
+二、ROS 1 接口兼容
+------------------
+1. 新增 gestelt_py_compat，兼容原 Python 代码中的 rospy 调用。
+2. 新增 gestelt_compat，兼容原 C++ 代码中的 ros::NodeHandle、
+   Publisher、Subscriber、Timer、Service 和参数接口。
+3. 修正 ROS 2 时间、参数名、四元数类型和消息头类型。
+4. 将兼容层订阅 QoS 调整为 Best Effort，以匹配 MAVROS 里程计。
+
+
+三、消息和导航模块
+------------------
+1. 更新 gestelt_msgs、gestelt_debug_msgs、traj_utils 和
+   decomp_ros_msgs 的 ROS 2 消息定义与生成配置。
+2. 适配 navigator、global_planner、path_searching、sfc_generation、
+   traj_opt、ego_planner_fsm 和 planner_adaptor。
+3. 修复 navigator 并发处理、DDS 航点传递和退出时 RMW 异常。
+
+
+四、控制与仿真接口
+------------------
+1. 迁移 trajectory_server 的 MAVROS 状态、位置、里程计、解锁、
+   模式切换和 setpoint_raw/local 接口。
+2. 增加 fake_drone 和外部 PX4 的选择参数。
+3. 新增 MAVROS PX4 参数配置和插件筛选配置。
+4. 禁用重复的 MAVROS odometry 插件，改由 local_position 提供 odom/TF。
+5. 增加 FRD 到 FLU 的静态 TF，修复相机和地图坐标变换。
+
+
+五、Launch、Gazebo 和 RViz
+--------------------------
+1. 新增 scenario_ros2.launch.py。
+2. 新增 gazebo_world.launch.py，用于 Gestelt 的显示模型。
+3. 新增 gestelt_ros2.rviz，配置地图、点云、TF、里程计和规划显示。
+4. RViz 里程计 QoS 设置为 Best Effort。
+5. Gazebo 显示模型命名为 gestelt_visual_drone。
+6. Gazebo 启动固定使用 127.0.0.1，避免 VPN 或无线网卡导致 GUI 黑屏。
+
+
+六、PX4 SITL
+------------
+1. PX4 源码位于：
+   /home/cjc/ws_capstone/PX4-Autopilot
+2. 验证提交：
+   2110eae25d32ef102c5e44f2590fd7f9d65fc44d
+3. 编译并启用 Gazebo Classic 的 Iris 动力学模型。
+4. MAVROS 连接地址：
+   udp://:14540@127.0.0.1:14580
+5. 已验证 PX4 可自动切换 OFFBOARD、解锁、起飞和跟踪任务轨迹。
+6. 修复 iris_vision airframe 引用，并使用 Gazebo external vision 验证
+   飞行中 GPS 中断后仍保持 xy_valid 和 v_xy_valid。
+7. GPS 中断操作和 EKF2 参数记录在 GPS中断测试.txt。
+8. 增加 GPS-denied VIO 失效测试，规定 GPS 全程关闭，并直接使用
+   failure vio off 阻断 vehicle_visual_odometry。
+9. 增加 AI 速度经 MAVROS ODOMETRY 输入 EKF2 的功能：
+   - ai_velocity_bridge.py
+   - gps_off_guard.py
+   - use_ai_velocity launch 参数
+   - enforce_gps_off 参数
+   - odometry 输入插件配置
+   - FLU/FRD TF 修复
+10. 验证 VIO/GPS 关闭时 AI 速度可维持 cs_ev_vel 和 v_xy_valid。
+11. 验证 AI 模式启动时自动设置 EKF2_GPS_CTRL=0 并注入 GPS off。
+
+
+七、AI 速度回退
+---------------
+1. 新增 /drone0/ai_imu/velocity 输入话题，类型为
+   geometry_msgs/Vector3Stamped，AI 节点输出预测速度。
+2. ai_velocity_bridge.py 将 AI 速度转换为 nav_msgs/Odometry，并发布到
+   /drone0/mavros/odometry/out；MAVROS 再转换为 MAVLink ODOMETRY
+   送入 PX4 vehicle_visual_odometry。
+3. AI 模式启用 MAVROS odometry 输入插件，并将 FLU/FRD TF 修正为
+   drone0_base_link -> drone0_base_link_frd。
+4. gps_off_guard.py 自动设置 EKF2_GPS_CTRL=0、启用故障注入并执行
+   GPS off，保证 AI 速度实验期间 GPS 不参与 EKF2。
+5. 建议 EKF2 配置：
+   EKF2_EV_CTRL=7（VIO+AI速度）或 4（仅外部速度）
+   EKF2_GPS_CTRL=0
+   EKF2_HGT_REF=0
+6. 已验证 GPS/VIO 关闭时持续 AI 速度可保持 cs_ev_vel=True、
+   v_xy_valid=True、cs_inertial_dead_reckoning=False。
+7. AI 速度停止约 5 秒后，EKF2 会恢复 velocity invalid 和失效保护。
+8. 当前完整空中实验仍需验证：VIO 和 AI 速度同时在线、飞机起飞后
+   执行 failure vio off，并确认 AI 速度无缝接管速度闭环。
+9. 完整操作和 echo 指令记录在 AI速度回退说明.txt。
+
+
+八、场景脚本
+------------
+1. 原 ROS 1 Python 场景脚本已适配 ROS 2 消息和兼容层。
+2. empty_map 场景已验证：
+   - 起飞
+   - 进入 MISSION
+   - 航点 (2, 2, 2)
+   - 航点 (5, 5, 1)
+3. 起飞、降落、任务和悬停仍由 trajectory_server 状态机控制。
+
+
+九、文档
+--------
+1. 环境配置和依赖.txt：
+   记录系统依赖、PX4 编译、colcon 编译和环境变量。
+2. 启动流程.txt：
+   记录 PX4、Gazebo、RViz、Gestelt 和任务脚本的启动流程。
+3. 项目修改记录.txt：
+   记录当前修改范围和验证状态。
+
+
+十、当前验证状态
+----------------
+已验证：
+1. 28 个包完整编译。
+2. ROS 2 fake simulation。
+3. PX4 SITL + Gazebo Classic + MAVROS。
+4. Gazebo 与 RViz2 同时显示。
+5. empty_map 单机物理飞行到 (5, 5, 1)。
+
+尚未验证：
+1. 真实无人机硬件部署。
+2. 多架 PX4 SITL 的独立 MAVLink 端口。
+3. 所有森林场景的 PX4 物理飞行效果。
+
+
+十一、后续记录格式
+----------------
+日期：
+修改文件：
+修改原因：
+验证命令：
+验证结果：

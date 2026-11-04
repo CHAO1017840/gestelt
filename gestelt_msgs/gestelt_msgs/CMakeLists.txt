@@ -1,56 +1,21 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.8)
 project(gestelt_msgs)
 
-add_compile_options(-std=c++17)
+find_package(ament_cmake REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
-set(MSG_DEP
-  std_msgs
-  geometry_msgs
+rosidl_generate_interfaces(
+  ${PROJECT_NAME}
+  msg/Command.msg
+  msg/Goals.msg
+  msg/CommanderState.msg
+  msg/ExecTrajectory.msg
+  msg/Sphere.msg
+  msg/SphericalSFCTrajectory.msg
+  DEPENDENCIES std_msgs geometry_msgs
 )
 
-find_package(catkin REQUIRED COMPONENTS
-  ${MSG_DEP}
-  message_generation
-)
-
-################################################
-## Declare ROS messages, services and actions ##
-################################################
-
-## Generate messages in the 'msg' folder
-add_message_files(
-  FILES
-  Command.msg
-  Goals.msg
-  CommanderState.msg
-  ExecTrajectory.msg
-  Sphere.msg
-  SphericalSFCTrajectory.msg
-)
-
-## Generate services in the 'srv' folder
-# add_service_files(
-#   FILES
-#   Service1.srv
-#   Service2.srv
-# )
-
-## Generate actions in the 'action' folder
-# add_action_files(
-#   FILES
-#   Action1.action
-#   Action2.action
-# )
-
-## Generate added messages and services with any dependencies listed here
-generate_messages(
-  DEPENDENCIES
-  ${MSG_DEP}
-)
-
-catkin_package(
-#  INCLUDE_DIRS include
-#  LIBRARIES gestelt_msgs
- CATKIN_DEPENDS ${MSG_DEP} message_runtime
-#  DEPENDS system_lib
-)
+ament_export_dependencies(rosidl_default_runtime)
+ament_package()

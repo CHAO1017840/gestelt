@@ -10,7 +10,7 @@
 
 #include <Eigen/Eigen>
 
-#include <ros/ros.h>
+#include <gestelt_ros2_compat/ros.hpp>
 
 struct Cylinder 
 {
@@ -800,7 +800,10 @@ int main(int argc, char **argv)
 	viewer.showCloud(cloud_map.makeShared());
 
 	// viewer.runOnVisualizationThreadOnce(&DeterministicForest::viewerOneOff);
-	viewer.runOnVisualizationThreadOnce(boost::bind(&DeterministicForest::viewerOneOff, &forest, _1));
+        viewer.runOnVisualizationThreadOnce(
+            [&forest](pcl::visualization::PCLVisualizer &viewer) {
+                forest.viewerOneOff(viewer);
+            });
 
 	while (!viewer.wasStopped() && ros::ok())
 	{

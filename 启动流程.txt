@@ -1,0 +1,596 @@
+Gestelt Ubuntu 22.04 + ROS 2 Humble 启动流程
+==============================================
+文档更新时间：2026-10-24
+
+本文档说明 PX4 SITL 物理仿真、Gazebo、RViz2、Gestelt 节点和任务脚本
+的分终端启动流程。
+
+系统依赖、PX4 编译和 colcon 编译请先完成同目录下的：
+环境配置和依赖.txt
+
+
+一、启动结构
+------------
+PX4 SITL + Gazebo Classic + Iris 动力学模型
+        |
+        | MAVLink UDP
+        | udp://:14540@127.0.0.1:14580
+        v
+MAVROS 2
+        |
+        | ROS 2 话题、TF、服务
+        v
+navigator / planner / trajectory_server
+        |
+        +--> RViz2 显示
+        +--> 任务脚本发送起飞、任务和航点
+
+PX4 会自己启动 Gazebo。因此物理仿真时：
+1. 必须使用 use_gazebo:=false。
+2. 不要另外运行 gazebo_world.launch.py。
+3. 不要同时启动两个 Gazebo master。
+
+
+二、每个 Gestelt 终端的公共环境命令
+-----------------------------------
+新开的 Gestelt 终端先执行：
+
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+检查：
+
+ros2 pkg prefix gestelt_bringup
+
+如果提示：
+Package 'gestelt_bringup' not found
+
+说明没有加载 install/setup.bash，不要继续启动。
+
+
+三、PX4 物理仿真手动分终端启动（推荐）
+--------------------------------------
+需要四个终端。第一次运行前确保 PX4 已经编译完成。
+
+
+终端1：PX4 SITL + Gazebo
+-------------------------
+该终端不需要加载 Gestelt：
+
+cd /home/cjc/ws_capstone/PX4-Autopilot
+export GAZEBO_IP=127.0.0.1
+export GAZEBO_MASTER_URI=http://127.0.0.1:11345
+make px4_sitl gazebo-classic
+
+该命令会启动：
+1. PX4 SITL。
+2. Gazebo Classic gzserver。
+3. Gazebo Classic gzclient。
+4. 具有真实动力学、名称为 iris 的四旋翼。
+
+等待 PX4 完成初始化，日志应出现类似：
+Ready for takeoff!
+
+Gazebo 中应看到 Iris 四旋翼，而不是静止的 gestelt_visual_drone。
+启动日志中的 Publicized address 应为 127.0.0.1。
+保持终端1运行。
+
+
+终端2：MAVROS + Gestelt 导航控制节点
+------------------------------------
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 launch gestelt_bringup scenario_ros2.launch.py \
+  scenario:=empty_map \
+  run_mission:=false \
+  use_rviz:=false \
+  use_gazebo:=false \
+  use_fake_drone:=false \
+  use_mavros:=true \
+  mavros_fcu_url:=udp://:14540@127.0.0.1:14580
+
+关键参数：
+use_gazebo:=false       不要启动第二个 Gazebo。
+use_fake_drone:=false   不使用无动力学的假无人机。
+use_mavros:=true        启动 MAVROS。
+run_mission:=false      先不自动发任务，稍后手动运行任务脚本。
+
+正常日志应包含：
+Plugin odometry ignored
+Got HEARTBEAT, connected. FCU: PX4 Autopilot
+[INIT] Connected to flight stack!
+Transitioning server state: INIT -> IDLE
+
+此时飞机应仍在地面，PX4 通常处于 AUTO.LOITER，armed=false。
+
+
+终端3：单独打开 RViz2
+----------------------
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+rviz2 -d install/gestelt_bringup/share/gestelt_bringup/launch/rviz/gestelt_ros2.rviz
+
+如果从 VS Code Snap 终端启动时出现 libpthread.so.0 或
+GLIBC_PRIVATE 错误，改为：
+
+env -u GTK_PATH -u GTK_EXE_PREFIX -u GTK_IM_MODULE_FILE \
+  -u GSETTINGS_SCHEMA_DIR -u GIO_MODULE_DIR -u SNAP_LIBRARY_PATH \
+  rviz2 -d install/gestelt_bringup/share/gestelt_bringup/launch/rviz/gestelt_ros2.rviz
+
+RViz2 检查项：
+1. Fixed Frame 为 world。
+2. PCD Map 已勾选。
+3. Sensor Cloud 已勾选。
+4. Drone Odometry 已勾选。
+5. Global Status 为 Ok。
+
+MAVROS 里程计使用 Best Effort QoS。
+gestelt_ros2.rviz 已经配置为 Best Effort，不要手动改回 Reliable。
+
+
+终端4：手动运行任务脚本
+------------------------
+等待终端1和终端2稳定后执行：
+
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+python3 install/gestelt_bringup/share/gestelt_bringup/scenarios/empty_map.py
+
+启动初期可能看到：
+No Server states received!
+Setting to HOVER mode!
+tick!
+Setting to MISSION mode!
+tick!
+Sending waypoints to UAVs
+
+任务脚本会：
+1. 发送 TAKEOFF 命令。
+2. 等待 trajectory_server 进入 HOVER。
+3. 发送 MISSION 命令。
+4. 发布航点 (2, 2, 2) 和 (5, 5, 1)。
+5. 航点发送完成后自行退出。
+
+本机已经验证过该 empty_map 流程能够完成 PX4 物理飞行。
+
+
+四、飞行过程中应看到的状态
+--------------------------
+1. 终端2日志：
+
+[TAKEOFF] Calling toggle offboard mode
+Setting OFFBOARD mode successful
+Setting arm to 1 successful
+Takeoff detected
+[TAKEOFF] Take off complete
+[HOVER] UAV entering [MISSION] mode.
+
+2. MAVROS 状态：
+
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 topic echo --once /drone0/mavros/state
+
+飞行时应为：
+connected: true
+armed: true
+mode: OFFBOARD
+
+3. trajectory_server 状态：
+
+ros2 topic echo --once /drone0/traj_server/state
+
+任务阶段应类似：
+drone_id: 0
+traj_server_state: MISSION
+uav_state: OFFBOARD
+armed: true
+
+4. MAVROS 局部位置：
+
+ros2 topic echo --once /drone0/mavros/local_position/odom \
+  --field pose.pose.position
+
+最终应接近：
+x: 5.0
+y: 5.0
+z: 1.0
+
+5. Gazebo Iris 位姿：
+
+gz model -m iris -p
+
+输出六元组：
+x y z roll pitch yaw
+
+PX4 的 sitl_run.sh 把 Iris 生成在 Gazebo 世界约：
+x=1.01  y=0.98  z=0.83
+
+PX4 的本地原点与 Gazebo 生成点不是同一个绝对坐标，所以 Gazebo 的 x/y
+通常会比 MAVROS 里程计大 1 米左右。判断物理飞行时看 Iris 是否从地面
+升空并移动到目标区域；判断控制目标时以 MAVROS 里程计为准。
+
+
+五、检查 MAVROS 和传感器
+------------------------
+MAVROS 必须连接：
+
+ros2 topic echo --once /drone0/mavros/state
+
+里程计频率应约 30 Hz：
+
+ros2 topic hz /drone0/mavros/local_position/odom
+
+TF 应存在：
+
+timeout 10 ros2 run tf2_ros tf2_echo world drone0_cam_link
+
+传感器点云应存在：
+
+ros2 topic hz /drone0/camera/depth/points
+
+当前计算机同时运行 Gazebo GUI、PX4、MAVROS 和规划器时，点云频率可能
+短时降低；navigator.yaml 已将 sensor_timeout 设为 3.0 秒。
+任务能继续规划并完成飞行时，启动初期的少量 No pose/odom 或
+sensor timeout 日志可以暂时观察，不应持续到整个飞行过程。
+
+
+六、自动运行任务（可选）
+------------------------
+如果不想在终端4手动执行场景脚本，终端2可改为：
+
+ros2 launch gestelt_bringup scenario_ros2.launch.py \
+  scenario:=empty_map \
+  run_mission:=true \
+  use_rviz:=false \
+  use_gazebo:=false \
+  use_fake_drone:=false \
+  use_mavros:=true \
+  mavros_fcu_url:=udp://:14540@127.0.0.1:14580
+
+run_mission:=true 会在节点启动 3 秒后自动运行 empty_map.py。
+如果要 RViz2 自动随节点打开，可再设置 use_rviz:=true。
+
+
+七、无 PX4 的 fake simulation
+----------------------------
+只验证导航、规划和 ROS 2 接口时，可以不启动 PX4：
+
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 launch gestelt_bringup scenario_ros2.launch.py \
+  scenario:=empty_map \
+  run_mission:=true \
+  use_rviz:=true \
+  use_gazebo:=false \
+  use_fake_drone:=true \
+  use_mavros:=false
+
+该模式使用 fake_drone_node，不需要 PX4 或 MAVROS。
+它的优势是启动快，适合检查算法和话题。
+
+如果同时设置：
+use_gazebo:=true
+
+则会打开 Gestelt 的显示用 Gazebo 世界和 gestelt_visual_drone。
+该模型没有 PX4 动力学，物理仿真时必须改用本文第三节的流程。
+
+
+八、只测试 Gazebo 显示模型
+--------------------------
+以下命令与 PX4 物理仿真互斥：
+
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 launch gestelt_bringup gazebo_world.launch.py \
+  world:=empty.world \
+  gui:=true
+
+正常应生成：
+gestelt_visual_drone
+
+该入口仅用于检查 world 和显示模型。它没有 PX4，不会响应 Gestelt 的
+OFFBOARD 控制。
+
+
+九、停止流程
+------------
+fake simulation：
+1. 停止任务脚本。
+2. 停止 RViz2。
+3. 在 Gestelt launch 终端按 Ctrl+C。
+4. 如果单独打开过 Gazebo，再停止 Gazebo。
+
+PX4 物理仿真：
+1. 不建议在飞机空中时直接关闭 Gestelt 控制节点。
+2. 可先运行降落脚本：
+
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+python3 install/gestelt_bringup/lib/gestelt_bringup/land.py
+
+3. 等 MAVROS 里程计 z 接近地面后停止脚本。
+4. 在 Gestelt launch 终端按 Ctrl+C。
+5. 停止 RViz2。
+6. 最后在 PX4 终端按 Ctrl+C，PX4 会一并关闭它启动的 Gazebo。
+
+不要直接使用 kill -9，除非进程已经失去响应。
+
+
+十、launch 参数说明
+-------------------
+scenario
+  场景名称，同时决定 PCD 地图和默认任务脚本。
+
+num_drones
+  覆盖场景默认无人机数量。
+
+run_mission
+  true：启动后自动运行场景任务。
+  false：不自动运行任务，适合手动执行场景脚本。
+
+use_rviz
+  true：由 launch 启动 RViz2。
+  false：不启动 RViz2。
+
+rviz_config
+  RViz 配置文件名，默认 gestelt_ros2.rviz。
+
+use_gazebo
+  true：启动 Gestelt 的显示用 Gazebo。
+  false：不启动 Gazebo。
+  PX4 物理仿真必须为 false。
+
+gazebo_world
+  Gestelt 显示用 Gazebo 世界名称，默认 empty.world。
+
+use_fake_drone
+  true：启动 fake_drone_node。
+  false：不使用 fake drone，适合外部 PX4。
+
+use_mavros
+  true：启动 MAVROS。
+  false：不启动 MAVROS。
+
+mavros_fcu_url
+  MAVROS 连接地址，PX4 SITL 默认：
+  udp://:14540@127.0.0.1:14580
+
+
+十一、常用场景
+--------------
+empty_map                 单无人机空地图
+empty_map_5               五无人机空地图
+forest_single             单无人机森林环境
+forest1_0p8               单无人机森林环境
+forest8_50obs             八无人机森林环境
+forest10_50obs            十无人机森林环境
+forest16_50obs            十六无人机森林环境
+antipodal_swap8_empty     八无人机空地图
+antipodal_swap10_empty    十无人机空地图
+vicon_empty1              单无人机 Vicon 场景
+vicon_empty3              三无人机 Vicon 场景
+vicon_obs3                三无人机障碍场景
+vicon_antipodal3          三无人机对飞场景
+
+目前只验证了单架 PX4 的 empty_map 物理飞行。
+多无人机 PX4 需要分别配置不同的 MAVLink 端口和命名空间，不能直接共用
+同一个 pymavlink 数据流。
+
+
+十二、常用话题
+--------------
+/fake_map
+  完整 PCD 点云地图。
+
+/droneN/camera/depth/points
+  fake sensor 发布的传感器点云。
+
+/droneN/mavros/state
+  PX4 连接、armed 和飞行模式。
+
+/droneN/mavros/local_position/odom
+  PX4 局部位置和速度，ROS 2 使用 ENU。
+
+/droneN/mavros/setpoint_raw/local
+  轨迹服务器发送给 MAVROS 的控制指令。
+
+/droneN/planner_adaptor/goals
+  用户航点输入。
+
+/droneN/planner/goals
+  规划适配器转发给 navigator 的航点。
+
+/droneN/back_end/trajectory
+  navigator 生成的多项式轨迹。
+
+/droneN/planner_adaptor/exec_trajectory
+  采样后发送给 trajectory_server 的控制点。
+
+/droneN/traj_server/command
+  起飞、降落、任务和悬停命令。
+
+/droneN/traj_server/state
+  trajectory_server、PX4 模式和 armed 状态。
+
+
+十三、故障排查
+--------------
+1. Package 'gestelt_bringup' not found
+
+   cd /home/cjc/ws_capstone/gestelt
+   source /opt/ros/humble/setup.bash
+   source install/setup.bash
+   ros2 pkg prefix gestelt_bringup
+
+
+2. ModuleNotFoundError: No module named 'gestelt_py_compat'
+
+   同样是没有加载工作空间：
+
+   cd /home/cjc/ws_capstone/gestelt
+   source /opt/ros/humble/setup.bash
+   source install/setup.bash
+
+
+3. PX4 server already running for instance 0
+
+   说明已经有一个 PX4 SITL instance 0 在运行，当前终端不能再执行一次
+   make px4_sitl gazebo-classic。
+
+   先检查：
+
+   ps -eo pid,comm,args | grep -E 'px4|sitl_run|gzserver'
+   ss -lunp | grep -E '14540|14580'
+   ls -l /tmp/px4_lock-0
+
+   如果飞机在空中，先通过 MAVROS 切换到自动降落：
+
+   ros2 service call /drone0/mavros/set_mode \
+     mavros_msgs/srv/SetMode \
+     "{base_mode: 0, custom_mode: 'AUTO.LAND'}"
+
+   等 armed 变为 false 后，回到原来的 PX4 终端按 Ctrl+C。
+   等 px4、gzserver 和 /tmp/px4_lock-0 全部消失后再重新启动。
+
+   不要在旧 PX4 仍运行时删除实例锁，也不要同时打开两个 Gazebo。
+
+
+4. gzserver 立即退出，exit code 255
+
+   通常表示已经有 Gazebo master，11345 端口冲突。
+
+   ss -ltnp | grep 11345
+   ps -eo pid,comm,args | grep -E 'gzserver|gzclient'
+
+   物理仿真只能由 PX4 启动 Gazebo。不要同时运行
+   gazebo_world.launch.py 或其他 gzserver。
+
+
+5. Gazebo 窗口是黑色，底部 Sim Time 不刷新
+
+   NUS VPN 或无线网卡可能让 Gazebo 使用 192.168.x.x 通告 transport
+   服务。先停止 PX4，再使用本机回环地址重启：
+
+   cd /home/cjc/ws_capstone/PX4-Autopilot
+   export GAZEBO_IP=127.0.0.1
+   export GAZEBO_MASTER_URI=http://127.0.0.1:11345
+   make px4_sitl gazebo-classic
+
+   日志中的 Publicized address 必须是 127.0.0.1。
+   正常情况下 Gazebo 会显示地面、地平线、仿真时间和 Iris。
+
+
+6. Gazebo 中只有静止的 gestelt_visual_drone
+
+   说明启动的是 Gestelt 显示模型，不是 PX4。
+
+   停止显示 Gazebo，然后在 PX4 目录运行：
+
+   make px4_sitl gazebo-classic
+
+   物理模型名称应为 iris。
+
+
+7. Gazebo 有 Iris，但它不起飞
+
+   先检查：
+
+   ros2 topic echo --once /drone0/mavros/state
+
+   要求 connected: true。
+
+   再检查终端2是否出现：
+   [INIT] Connected to flight stack!
+   Transitioning server state: INIT -> IDLE
+
+   然后检查任务脚本是否已经发送 TAKEOFF，或改用 run_mission:=true。
+
+
+8. MAVROS 显示 odometry 插件报 FRD/FLU TF 错误
+
+   本项目使用：
+   gestelt_bringup/config/mavros_px4_gestelt_plugins.yaml
+
+   该配置禁用 MAVROS odometry 插件，由 local_position 插件提供
+   odom/TF。
+
+   修改这个 YAML 后需要重新编译 bringup：
+
+   source /opt/ros/humble/setup.bash
+   colcon build --symlink-install --packages-select gestelt_bringup
+   source install/setup.bash
+
+
+9. RViz2 收不到里程计
+
+   检查 Drone Odometry 的 QoS：
+   Reliability Policy: Best Effort
+
+   当前 gestelt_ros2.rviz 已经正确配置。
+
+
+10. RViz2 出现 GLIBC_PRIVATE
+
+   使用本文终端3中的 env -u 命令，或优先让 scenario launch 的
+   use_rviz:=true 启动。
+
+
+11. 启动初期出现 No pose/odom 或 sensor timeout
+
+   TF、PCD 地图和 fake sensor 需要数秒初始化。
+   navigator.yaml 当前 sensor_timeout 为 3.0 秒。
+
+   如果飞行过程中持续报 timeout，检查：
+
+   ros2 topic hz /drone0/camera/depth/points
+   ros2 topic hz /drone0/mavros/local_position/odom
+   timeout 10 ros2 run tf2_ros tf2_echo world drone0_cam_link
+
+
+12. Gazebo 位置和 MAVROS 位置的 x/y 相差约 1 米
+
+    PX4 的 Iris 在 Gazebo 世界中的生成点约为 (1.01, 0.98, 0.83)。
+    MAVROS 里程计以 PX4 本地原点为基准。
+
+    因此不要直接用 Gazebo 绝对位姿和 MAVROS 航点作逐项相等比较。
+    看 Iris 是否升空、移动并跟随机头/位置变化即可。
+
+
+13. 不要使用旧 XML launch
+
+    launch/*.launch 是 ROS 1 参考文件。
+    ROS 2 使用 scenario_ros2.launch.py 和 gazebo_world.launch.py。
+
+
+十四、最短验证命令
+------------------
+无 PX4，只验证算法：
+
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 launch gestelt_bringup scenario_ros2.launch.py \
+  scenario:=empty_map \
+  run_mission:=true \
+  use_rviz:=true \
+  use_gazebo:=false \
+  use_fake_drone:=true \
+  use_mavros:=false
+
+PX4 物理仿真：
+1. 终端1运行 make px4_sitl gazebo-classic。
+2. 按本文第三节启动终端2、终端3和终端4。

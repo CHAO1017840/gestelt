@@ -1,42 +1,24 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.8)
 project(fake_drone)
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_FLAGS "-std=c++17")
-
-set (ROS_LIBRARIES
-  geometry_msgs
-  roscpp
-  tf2_ros
-)
-
-# set (ROS_DEPENDS
-# )
-
-find_package(catkin REQUIRED COMPONENTS
-  ${ROS_LIBRARIES}
-)
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(mavros_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(gestelt_compat REQUIRED)
 
-catkin_package(
- INCLUDE_DIRS include
-#  CATKIN_DEPENDS ${ROS_DEPENDS}
+add_executable(fake_drone_node src/fake_drone_node.cpp src/fake_drone.cpp)
+target_include_directories(fake_drone_node PRIVATE include)
+target_compile_features(fake_drone_node PRIVATE cxx_std_17)
+target_link_libraries(fake_drone_node PRIVATE
+  gestelt_compat::gestelt_compat
+  tf2_ros::tf2_ros
+  rclcpp::rclcpp
+  ${mavros_msgs_TARGETS}
+  Eigen3::Eigen
 )
 
-###########
-## Build ##
-###########
-
-include_directories(
-  include
-  ${catkin_INCLUDE_DIRS}
-  ${EIGEN3_INCLUDE_DIR}
-)
-
-add_executable (fake_drone_node
-  src/fake_drone_node.cpp
-  src/fake_drone.cpp
-)
-target_link_libraries(fake_drone_node
-  ${catkin_LIBRARIES}
-)
+install(TARGETS fake_drone_node DESTINATION lib/${PROJECT_NAME})
+ament_export_dependencies(rclcpp tf2_ros mavros_msgs Eigen3 gestelt_compat)
+ament_package()

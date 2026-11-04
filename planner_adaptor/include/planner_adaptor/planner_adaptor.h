@@ -1,16 +1,16 @@
 #ifndef _PLANNER_ADAPTOR_H_
 #define _PLANNER_ADAPTOR_H_
 
-#include <ros/ros.h>
+#include <gestelt_ros2_compat/ros.hpp>
 
 #include <Eigen/Eigen>
 
-#include <std_msgs/Empty.h>
-#include <geometry_msgs/Transform.h>
+#include <std_msgs/msg/empty.hpp>
+#include <geometry_msgs/msg/transform.hpp>
 
-#include <gestelt_msgs/Command.h>
-#include <gestelt_msgs/Goals.h>
-#include <gestelt_msgs/ExecTrajectory.h>
+#include <gestelt_msgs/msg/command.hpp>
+#include <gestelt_msgs/msg/goals.hpp>
+#include <gestelt_msgs/msg/exec_trajectory.hpp>
 
 class PlannerAdaptor
 {
@@ -48,7 +48,7 @@ public:
    * @brief Planner heartbeat callback
    * 
    */
-  virtual void plannerHeartbeatCB(const std_msgs::Empty::ConstPtr& msg){
+  virtual void plannerHeartbeatCB(const std_msgs::Empty::ConstSharedPtr& msg){
     last_planner_heartbeat_time_ = ros::Time::now().toSec();
   }
 
@@ -56,7 +56,7 @@ public:
    * @brief Goal callback. Could be modified to pass on velocities and accelerations as goal waypoints to the planner
    * 
    */
-  virtual void goalsCB(const gestelt_msgs::Goals::ConstPtr& msg){
+  virtual void goalsCB(const gestelt_msgs::Goals::ConstSharedPtr& msg){
     std::vector<Eigen::Vector3d> goal_waypoints;
 
     for (auto& pos : msg->transforms){

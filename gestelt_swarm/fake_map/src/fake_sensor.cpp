@@ -1,6 +1,10 @@
 #include <fake_map/fake_sensor.h>
+#include <tf2/time.h>
 
 FakeSensor::FakeSensor(ros::NodeHandle &nh, ros::NodeHandle &pnh){
+	node_ = nh.node_ptr();
+	tfBuffer_ = std::make_shared<tf2_ros::Buffer>(
+		node_->get_clock(), tf2::durationFromSec(10.0), node_);
 	// Laser ray tracing params
 	int _hrz_laser_line_num;
 	int _vtc_laser_line_num;
@@ -104,7 +108,7 @@ void FakeSensor::reset()
 	sensor_cloud_.reset(new pcl::PointCloud<pcl::PointXYZ>);
 
 	// Transformations
-	tfListener_.reset(new tf2_ros::TransformListener(tfBuffer_));
+	tfListener_.reset(new tf2_ros::TransformListener(*tfBuffer_, node_));
 
 	if (downsampler_active_){
 		vox_grid_ = std::make_shared<pcl::VoxelGrid<pcl::PointXYZ>>();
@@ -121,7 +125,7 @@ FakeSensor::~FakeSensor()
 /* Subscriber Callbacks*/
 
 // We dont use pose because we will have to perform the transformation ourselves
-// void FakeSensor::poseCB(const geometry_msgs::PoseStamped::ConstPtr &msg)
+// void FakeSensor::poseCB(const geometry_msgs::PoseStamped::ConstSharedPtr &msg)
 // {
 // 	pose_sensor_mutex_.lock();
 // 	pose_ = *msg;
@@ -139,7 +143,8 @@ void FakeSensor::TFListenCB(const ros::TimerEvent &)
 		std::unique_lock<std::mutex> lck(sensor_tf_mutex_, std::try_to_lock);
 		if (lck.owns_lock()){
 			// Get transform from sensor_frame to global frame
-			sens_to_gbl_tf_ = tfBuffer_.lookupTransform(global_frame_, sensor_frame_, ros::Time(0));
+			sens_to_gbl_tf_ = tfBuffer_->lookupTransform(
+				global_frame_, sensor_frame_, rclcpp::Time(0, 0, RCL_ROS_TIME));
 			cam_tf_valid_ = true;
 		}
     }
@@ -203,22 +208,10 @@ void FakeSensor::sensorUpdateTimerCB(const ros::TimerEvent &)
 	// Generate point cloud from position and orientation of sensor
 	fake_laser_.render_sensed_points(sensor_pos_, sensor_rot_, *sensor_cloud_);
 
-	// Create transformation matrix from global to sensor frame
-	tf::StampedTransform transform_sens_to_gbl;
-	tf::transformStampedMsgToTF(sens_to_gbl_tf, transform_sens_to_gbl);
-	geometry_msgs::Transform  gbl_to_sens_tf;
-	tf::transformTFToMsg(transform_sens_to_gbl.inverse(), gbl_to_sens_tf);
-	
-	// Create transformation matrix from global to sensor frame
-	Eigen::Matrix4d gbl_to_sens_tf_mat;
-	gbl_to_sens_tf_mat.block<3, 3>(0, 0) = Eigen::Quaterniond(gbl_to_sens_tf.rotation.w,
-											gbl_to_sens_tf.rotation.x,
-											gbl_to_sens_tf.rotation.y,
-											gbl_to_sens_tf.rotation.z).toRotationMatrix();
-	gbl_to_sens_tf_mat(0, 3) = gbl_to_sens_tf.translation.x;
-	gbl_to_sens_tf_mat(1, 3) = gbl_to_sens_tf.translation.y;
-	gbl_to_sens_tf_mat(2, 3) = gbl_to_sens_tf.translation.z;
-	gbl_to_sens_tf_mat(3, 3) = 1.0;
+	Eigen::Matrix4d sens_to_gbl = Eigen::Matrix4d::Identity();
+	sens_to_gbl.block<3, 3>(0, 0) = sensor_rot_;
+	sens_to_gbl.block<3, 1>(0, 3) = sensor_pos_;
+	Eigen::Matrix4d gbl_to_sens_tf_mat = sens_to_gbl.inverse();
 
 	// Transform cloud from global to camera frame
 	pcl::transformPointCloud (*sensor_cloud_, *sensor_cloud_, gbl_to_sens_tf_mat);

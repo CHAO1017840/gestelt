@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import rospy
+import gestelt_py_compat.rospy_compat as rospy
 from geometry_msgs.msg import Pose
 from std_msgs.msg import Empty 
 
@@ -14,10 +14,10 @@ def create_pose(x, y, z):
     pose.position.y = y
     pose.position.z = z
 
-    pose.orientation.x = 0
-    pose.orientation.y = 0
-    pose.orientation.z = 0
-    pose.orientation.w = 1
+    pose.orientation.x = 0.0
+    pose.orientation.y = 0.0
+    pose.orientation.z = 0.0
+    pose.orientation.w = 1.0
     return pose
 
 def main():

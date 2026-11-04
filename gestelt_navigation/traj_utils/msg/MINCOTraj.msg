@@ -1,8 +1,8 @@
 int16 drone_id
 int32 traj_id
-time start_time
+builtin_interfaces/Time start_time
 
-Header header
+std_msgs/Header header
 
 uint8 order
 float32[3] start_p

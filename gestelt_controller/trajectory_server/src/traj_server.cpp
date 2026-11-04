@@ -79,7 +79,7 @@ void TrajectoryServer::init(ros::NodeHandle& nh, ros::NodeHandle& pnh)
 
 /* Subscriber Callbacks */
 
-void TrajectoryServer::execTrajCb(const gestelt_msgs::ExecTrajectory::ConstPtr &msg)
+void TrajectoryServer::execTrajCb(const gestelt_msgs::ExecTrajectory::ConstSharedPtr &msg)
 {
   if (getServerState() != ServerState::MISSION){ 
     logErrorThrottled("Executing Joint Trajectory while not in MISSION mode. Ignoring!", 1.0);
@@ -108,13 +108,13 @@ void TrajectoryServer::execTrajCb(const gestelt_msgs::ExecTrajectory::ConstPtr &
 
 }
 
-void TrajectoryServer::UAVStateCb(const mavros_msgs::State::ConstPtr &msg)
+void TrajectoryServer::UAVStateCb(const mavros_msgs::State::ConstSharedPtr &msg)
 {
   // logInfoThrottled(str_fmt("State: Mode[%s], Connected[%d], Armed[%d]", msg->mode.c_str(), msg->connected, msg->armed), 1.0);
   uav_current_state_ = *msg;
 }
 
-void TrajectoryServer::UAVPoseCB(const geometry_msgs::PoseStamped::ConstPtr &msg)
+void TrajectoryServer::UAVPoseCB(const geometry_msgs::PoseStamped::ConstSharedPtr &msg)
 {
   if (first_pose_){
     last_mission_pos_(0) = msg->pose.position.x;
@@ -129,7 +129,7 @@ void TrajectoryServer::UAVPoseCB(const geometry_msgs::PoseStamped::ConstPtr &msg
   uav_pose_ = *msg; 
 }
 
-void TrajectoryServer::UAVOdomCB(const nav_msgs::Odometry::ConstPtr &msg)
+void TrajectoryServer::UAVOdomCB(const nav_msgs::Odometry::ConstSharedPtr &msg)
 {
   uav_odom_ = *msg;
 
@@ -145,7 +145,7 @@ void TrajectoryServer::UAVOdomCB(const nav_msgs::Odometry::ConstPtr &msg)
   vel_magnitude_pub_.publish(vel_mag_msg);
 }
 
-void TrajectoryServer::swarmServerCommandCb(const std_msgs::Int8::ConstPtr & msg)
+void TrajectoryServer::swarmServerCommandCb(const std_msgs::Int8::ConstSharedPtr & msg)
 {
   if (msg->data < 0 || msg->data > ServerEvent::EMPTY_E){
     logError("Invalid server command, ignoring...");
@@ -154,7 +154,7 @@ void TrajectoryServer::swarmServerCommandCb(const std_msgs::Int8::ConstPtr & msg
   setServerEvent(ServerEvent(msg->data));
 }
 
-void TrajectoryServer::serverCommandCb(const gestelt_msgs::Command::ConstPtr & msg)
+void TrajectoryServer::serverCommandCb(const gestelt_msgs::Command::ConstSharedPtr & msg)
 {
   if (msg->command < 0 || msg->command > ServerEvent::EMPTY_E){
     logError("Invalid server command, ignoring...");
@@ -283,7 +283,7 @@ void TrajectoryServer::tickServerStateTimerCb(const ros::TimerEvent &e)
       }
 
       if (!isUAVReady()){
-        logInfo("[TAKEOFF] Calling toggle offboard mode");
+        logInfoThrottled("[TAKEOFF] Calling toggle offboard mode", 1.0);
         toggleOffboardMode(true);
       }
 
@@ -499,6 +499,14 @@ void TrajectoryServer::publishCmd(
 
 bool TrajectoryServer::toggleOffboardMode(bool toggle)
   {
+    if (toggle_in_progress_.exchange(true)) {
+      return false;
+    }
+    struct ToggleGuard {
+      std::atomic<bool> & flag;
+      ~ToggleGuard() {flag = false;}
+    } toggle_guard{toggle_in_progress_};
+
     bool arm_val = false;
     std::string set_mode_val = "AUTO.LOITER"; 
     if (toggle){
@@ -510,11 +518,13 @@ bool TrajectoryServer::toggleOffboardMode(bool toggle)
       return (toggle ? isUAVReady() : isUAVIdle());
     };
 
-    mavros_msgs::CommandBool arm_cmd;
-    arm_cmd.request.value = arm_val;
+    mavros_msgs::CommandBool::Request arm_req;
+    mavros_msgs::CommandBool::Response arm_res;
+    arm_req.value = arm_val;
 
-    mavros_msgs::SetMode set_mode_srv;
-    set_mode_srv.request.custom_mode = set_mode_val;
+    mavros_msgs::SetMode::Request set_mode_req;
+    mavros_msgs::SetMode::Response set_mode_res;
+    set_mode_req.custom_mode = set_mode_val;
 
     // Make sure takeoff is not immediately sent, 
     // this will help to stream the correct data to the program first.
@@ -538,9 +548,9 @@ bool TrajectoryServer::toggleOffboardMode(bool toggle)
 
       if (uav_current_state_.mode != set_mode_val && request_timeout)
       {
-        if (set_mode_client.call(set_mode_srv))
+        if (set_mode_client.call(set_mode_req, set_mode_res))
         {
-          if (set_mode_srv.response.mode_sent){
+          if (set_mode_res.mode_sent){
             logInfo(str_fmt("Setting %s mode successful", set_mode_val.c_str()));
           }
           else {
@@ -555,8 +565,8 @@ bool TrajectoryServer::toggleOffboardMode(bool toggle)
       }
       else if (uav_current_state_.armed != arm_val && request_timeout) 
       {
-        if (arming_client.call(arm_cmd)){
-          if (arm_cmd.response.success){
+        if (arming_client.call(arm_req, arm_res)){
+          if (arm_res.success){
             logInfo(str_fmt("Setting arm to %d successful", arm_val));
           }
           else {

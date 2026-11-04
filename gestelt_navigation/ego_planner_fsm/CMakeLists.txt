@@ -1,59 +1,44 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.8)
 project(ego_planner_fsm)
 
-set(CMAKE_BUILD_TYPE "Release")
-ADD_COMPILE_OPTIONS(-std=c++17 )
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
-
-
-set(ROS_LIBRARIES
-  roscpp
-  std_msgs
-  geometry_msgs
-  tf2_ros
-  gestelt_msgs
-  traj_opt
-)
-
-# set(ROS_DEPENDS
-# )
-
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(tf2_ros REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(catkin REQUIRED COMPONENTS
-  ${ROS_LIBRARIES}
+find_package(gestelt_compat REQUIRED)
+find_package(gestelt_msgs REQUIRED)
+find_package(grid_map REQUIRED)
+find_package(path_searching REQUIRED)
+find_package(traj_opt REQUIRED)
+find_package(traj_utils REQUIRED)
+
+add_library(${PROJECT_NAME} SHARED src/ego_planner_manager.cpp)
+target_include_directories(${PROJECT_NAME} PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
+target_link_libraries(${PROJECT_NAME} PUBLIC
+  gestelt_compat::gestelt_compat
+  gestelt_msgs::gestelt_msgs
+  grid_map::grid_map
+  path_searching::path_searching
+  traj_opt::traj_opt
+  traj_utils::traj_utils
+  tf2_ros::tf2_ros
+  rclcpp::rclcpp
+  Eigen3::Eigen
 )
 
-catkin_package(
- INCLUDE_DIRS include
- LIBRARIES ${PROJECT_NAME}
-#  CATKIN_DEPENDS ${ROS_DEPENDS}
+install(DIRECTORY include/ DESTINATION include)
+install(TARGETS ${PROJECT_NAME}
+  EXPORT ${PROJECT_NAME}Targets
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin
 )
-
-include_directories(
-  include
-  ${catkin_INCLUDE_DIRS} 
-  ${PROJECT_SOURCE_DIR}/include
-  ${EIGEN3_INCLUDE_DIR}
+ament_export_targets(${PROJECT_NAME}Targets HAS_LIBRARY_TARGET NAMESPACE ${PROJECT_NAME}::)
+ament_export_dependencies(
+  rclcpp tf2_ros Eigen3 gestelt_compat gestelt_msgs grid_map path_searching traj_opt traj_utils
 )
-
-## Declare a C++ library
-add_library(${PROJECT_NAME} 
-  include/ego_planner_fsm/ego_planner_manager.h
-  src/ego_planner_manager.cpp
-)
-
-## Specify libraries to link a library or executable target against
-target_link_libraries(${PROJECT_NAME}
-  ${catkin_LIBRARIES}
-)
-
-# add_executable(ego_planner_fsm_node
-#   src/ego_planner_fsm_node.cpp 
-#   src/ego_planner_fsm.cpp 
-#   src/ego_planner_manager.cpp 
-# )
-# target_link_libraries(ego_planner_fsm_node 
-#   ${catkin_LIBRARIES}
-# )
-
-
+ament_package()

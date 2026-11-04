@@ -6,7 +6,7 @@
 #include <limits>
 #include <Eigen/Eigen>
 #include <queue>
-#include <boost/functional/hash_fwd.hpp>
+#include <boost/functional/hash.hpp>
 
 using namespace Eigen;
 constexpr double infinity = std::numeric_limits<float>::infinity();

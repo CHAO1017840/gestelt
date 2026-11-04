@@ -19,6 +19,113 @@ Or see the pdf at:  [tan2024gestelt.pdf](Gestelt__A_framework_for_acceleration_t
 
 For simulation and deployment on a physical drone, PX4 is the firmware of choice, although it is possible to remap the topics for use with Ardupilot or any other Mavlink-compatible system.
 
+## ROS 2 Humble port
+
+This branch targets **Ubuntu 22.04 + ROS 2 Humble**. The C++ packages use
+`ament_cmake`/`colcon`, custom interfaces use ROS 2 message generation, and the
+Python scenario entry points run on `rclpy`.
+
+The ROS 2 fake simulation has been validated end to end with the `empty_map`
+scenario: takeoff, `MISSION` transition, waypoint planning, trajectory
+execution, arrival at the final waypoint, and clean launch shutdown.
+
+### Build
+
+```bash
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+rosdep install --from-paths . --ignore-src -r -y
+colcon build --symlink-install
+source install/setup.bash
+```
+
+For development builds, `--continue-on-error` is useful when checking several
+packages at once. A complete build currently produces 28 packages.
+
+### Run a fake-map scenario
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 launch gestelt_bringup scenario_ros2.launch.py \
+  scenario:=empty_map run_mission:=true use_rviz:=false
+```
+
+Common launch arguments:
+
+- `scenario`: scenario name such as `empty_map`, `forest_single`, or
+  `antipodal_swap8_empty`.
+- `num_drones`: optional fleet-size override.
+- `run_mission`: set to `false` to start the stack without the scenario script.
+- `use_rviz`: set to `true` to start RViz2.
+- `rviz_config`: RViz configuration name under `launch/rviz` or an absolute path.
+- `use_gazebo`: set to `true` to start Gazebo Classic with a display-only drone.
+- `gazebo_world`: Gazebo world filename under `simulation/worlds`.
+
+Example multi-drone startup without running a mission:
+
+```bash
+ros2 launch gestelt_bringup scenario_ros2.launch.py \
+  scenario:=empty_map num_drones:=2 run_mission:=false use_rviz:=false
+```
+
+Check the trajectory-server state and aircraft position with:
+
+```bash
+ros2 topic echo --once /drone0/traj_server/state
+ros2 topic echo --once /drone0/mavros/local_position/odom
+```
+
+### Gazebo Classic and RViz2
+
+Install the Gazebo integration once:
+
+```bash
+sudo apt install gazebo ros-humble-gazebo-ros-pkgs
+```
+
+Launch Gazebo, RViz2, and the fake-map stack together:
+
+```bash
+ros2 launch gestelt_bringup scenario_ros2.launch.py \
+  scenario:=forest_single \
+  gazebo_world:=empty.world \
+  use_gazebo:=true \
+  use_rviz:=true \
+  run_mission:=false
+```
+
+RViz loads `gestelt_ros2.rviz` and displays `/fake_map`, the drone sensor cloud,
+odometry, TF, the goal marker, and the planned trajectory. Gazebo opens the
+selected world with a display-only quadrotor model. It does not currently run
+PX4 dynamics, so the Gazebo model stays at its spawn pose while the dynamics-free
+ROS 2 drone moves in RViz.
+
+Launch only Gazebo:
+
+```bash
+ros2 launch gestelt_bringup gazebo_world.launch.py \
+  world:=empty.world gui:=true
+```
+
+### ROS 2 compatibility packages
+
+- `gestelt_compat` provides the small ROS 1-shaped C++ API used by the original
+  source, backed by `rclcpp`, plus ROS 1 message-name aliases. It also translates
+  timestamp and parameter conventions between ROS 1 and ROS 2.
+- `gestelt_py_compat` provides the `rospy` subset used by the scenario scripts,
+  backed by `rclpy`.
+
+The old XML launch files and shell scripts remain in the tree as ROS 1 reference
+material. Use `scenario_ros2.launch.py` for the migrated fake simulation.
+`decomp_ros_utils`, `decomp_test_node`, and `catkin_simple` are ROS 1-only and are
+marked with `COLCON_IGNORE`.
+
+Gazebo Classic 11 world startup and the display-only drone model have been
+validated. The PX4/Gazebo SITL dynamics path and physical-aircraft deployment
+files have not yet been revalidated against ROS 2 Humble. The validated control
+path is the dynamics-free fake drone/fake sensor stack described above.
+
 # Multi-agent navigation with corridor constraints
 <img src="docs/pictures/fake_drones_10_antipodal.gif" alt="10 simulated drones antipodal (Spherical)" style="width: 300px;"/>
 <img src="docs/pictures/poly_sfc_multi.gif" alt="8 simulated drones antipodal (Polyhedral)" style="width: 300px;"/>

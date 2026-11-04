@@ -1,52 +1,39 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.8)
 project(navigator)
 
-set(CMAKE_BUILD_TYPE "Release")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
-
-add_compile_options(-std=c++17)
-
-set(ROS_LIBRARIES
-  roscpp
-  std_msgs
-  geometry_msgs
-  nav_msgs
-  gestelt_msgs
-  global_planner
-  sfc_generation
-  traj_utils
-  traj_opt
-  gestelt_debug_msgs
-  ego_planner_fsm
-) 
-
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(catkin REQUIRED COMPONENTS
-  ${ROS_LIBRARIES}
-)
-find_package(decomp_util)
+find_package(gestelt_compat REQUIRED)
+find_package(gestelt_msgs REQUIRED)
+find_package(gestelt_debug_msgs REQUIRED)
+find_package(global_planner REQUIRED)
+find_package(sfc_generation REQUIRED)
+find_package(traj_utils REQUIRED)
+find_package(traj_opt REQUIRED)
+find_package(ego_planner_fsm REQUIRED)
+find_package(decomp_util REQUIRED)
 
-catkin_package(
- INCLUDE_DIRS include
- LIBRARIES ${PROJECT_NAME}
-#  CATKIN_DEPENDS 
+add_executable(${PROJECT_NAME}_node src/navigator_node.cpp src/navigator.cpp)
+target_include_directories(${PROJECT_NAME}_node PRIVATE include)
+target_compile_features(${PROJECT_NAME}_node PRIVATE cxx_std_17)
+target_link_libraries(${PROJECT_NAME}_node PRIVATE
+  gestelt_compat::gestelt_compat
+  gestelt_msgs::gestelt_msgs
+  gestelt_debug_msgs::gestelt_debug_msgs
+  global_planner::global_planner
+  sfc_generation::sfc_generation
+  traj_utils::traj_utils
+  traj_opt::traj_opt
+  ego_planner_fsm::ego_planner_fsm
+  decomp_util::decomp_util
+  rclcpp::rclcpp
+  Eigen3::Eigen
 )
 
-include_directories(
-  include
-  SYSTEM
-  ${catkin_INCLUDE_DIRS} 
-  # ${PROJECT_SOURCE_DIR}/include
-  ${EIGEN3_INCLUDE_DIR}
-  ${DECOMP_UTIL_INCLUDE_DIRS} 
+install(TARGETS ${PROJECT_NAME}_node DESTINATION lib/${PROJECT_NAME})
+ament_export_dependencies(
+  rclcpp Eigen3 gestelt_compat gestelt_msgs gestelt_debug_msgs
+  global_planner sfc_generation traj_utils traj_opt ego_planner_fsm decomp_util
 )
-
-add_executable(navigator_node
-  src/navigator_node.cpp 
-  src/navigator.cpp 
-)
-target_link_libraries(navigator_node 
-  ${catkin_LIBRARIES}
-)
-
-
+ament_package()

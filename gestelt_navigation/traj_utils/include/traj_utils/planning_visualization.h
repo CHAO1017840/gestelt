@@ -4,10 +4,10 @@
 #include <eigen3/Eigen/Eigen>
 #include <algorithm>
 #include <iostream>
-#include <ros/ros.h>
+#include <gestelt_ros2_compat/ros.hpp>
 #include <vector>
-#include <visualization_msgs/Marker.h>
-#include <visualization_msgs/MarkerArray.h>
+#include <visualization_msgs/msg/marker.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 #include <stdlib.h>
 
 using std::vector;

@@ -1,0 +1,606 @@
+Gestelt GPS-denied VIO + AI 速度回退完整流程
+==========================================
+更新时间：2026-10-24
+适用环境：Ubuntu 22.04 + ROS 2 Humble + PX4 SITL + Gazebo Classic
+
+
+一、实验目标
+------------
+本实验同时启用：
+
+1. Gazebo Iris 动力学模型。
+2. PX4 EKF2。
+3. VIO 外部视觉。
+4. AI IMU 速度估计。
+5. MAVROS 和 Gestelt 任务控制。
+
+飞行期间 GPS 必须全程关闭。
+VIO 正常时，EKF2 可以使用 VIO 和 AI 速度。
+飞行中让 VIO 失效后，AI 速度继续为 EKF2 提供速度观测，
+使速度闭环不被禁用。
+
+如果 AI 速度也停止，EKF2 仍应触发 invalid 和失效保护。
+invalid 检查不能被关闭。
+
+
+二、数据流
+----------
+原始 IMU
+  -> AI 速度预测器
+  -> /drone0/ai_imu/velocity
+  -> ai_velocity_bridge.py
+  -> /drone0/mavros/odometry/out
+  -> MAVROS odometry 插件
+  -> MAVLink ODOMETRY
+  -> PX4 vehicle_visual_odometry
+  -> EKF2 外部速度融合
+
+Gazebo VIO：
+
+Gazebo iris_vision
+  -> Gazebo vision_odom
+  -> MAVLink ODOMETRY
+  -> PX4 vehicle_visual_odometry
+  -> EKF2 外部位置/速度融合
+
+GPS：
+
+HIL_GPS
+  -> 被 gps_off_guard.py 阻断
+  -> EKF2_GPS_CTRL=0
+  -> cs_gps=False
+
+
+三、新增文件
+------------
+AI 速度桥接：
+gestelt_bringup/src/ai_velocity_bridge.py
+
+GPS 强制关闭节点：
+gestelt_bringup/src/gps_off_guard.py
+
+MAVROS AI 插件配置：
+gestelt_bringup/config/mavros_px4_gestelt_plugins_ai.yaml
+
+ROS 2 launch：
+gestelt_bringup/launch/scenario_ros2.launch.py
+
+AI 节点输入：
+/drone0/ai_imu/velocity
+
+消息类型：
+geometry_msgs/msg/Vector3Stamped
+
+AI 节点只发布速度，不发布 GPS。
+桥接节点只读取 vector.x/y/z，不读取经纬度或位置。
+
+
+四、配置 PX4 EKF2
+-----------------
+终端1：
+
+cd /home/cjc/ws_capstone/PX4-Autopilot
+export GAZEBO_IP=127.0.0.1
+export GAZEBO_MASTER_URI=http://127.0.0.1:11345
+make px4_sitl gazebo-classic_iris_vision
+
+等待：
+
+Ready for takeoff!
+
+在 PX4 pxh> 中设置 VIO + AI 速度配置：
+
+param set EKF2_EV_CTRL 7
+param set EKF2_GPS_CTRL 0
+param set EKF2_HGT_REF 0
+param save
+
+参数含义：
+
+EKF2_EV_CTRL=7
+  水平位置 + 高度 + 3D速度。
+
+EKF2_GPS_CTRL=0
+  EKF2 不融合 GPS。
+
+EKF2_HGT_REF=0
+  VIO 高度失效后使用气压计高度。
+
+EKF2_HGT_REF 是重启生效参数。
+保存后停止 PX4，再重新启动：
+
+cd /home/cjc/ws_capstone/PX4-Autopilot
+export GAZEBO_IP=127.0.0.1
+export GAZEBO_MASTER_URI=http://127.0.0.1:11345
+make px4_sitl gazebo-classic_iris_vision
+
+重新等待 Ready for takeoff!
+
+如果只使用 AI 速度，不需要 VIO 位置，可使用：
+
+param set EKF2_EV_CTRL 4
+
+打开故障注入总开关,实际模拟 Gazebo VIO 数据失效
+param set SYS_FAILURE_EN 1
+failure vio off
+
+
+五、启动 Gestelt、MAVROS、RViz 和 GPS guard
+-------------------------------------------
+终端2：
+
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 launch gestelt_bringup scenario_ros2.launch.py \
+  scenario:=empty_map \
+  run_mission:=false \
+  use_rviz:=true \
+  use_gazebo:=false \
+  use_fake_drone:=false \
+  use_mavros:=true \
+  use_ai_velocity:=true \
+  ai_velocity_topic:=ai_imu/velocity \
+  ai_velocity_variance:=0.04 \
+  enforce_gps_off:=true
+
+关键参数：
+
+use_gazebo:=false
+  Gazebo 已经由 PX4 启动，不能再次启动。
+
+use_fake_drone:=false
+  不使用 Gestelt 假无人机。
+
+use_mavros:=true
+  启用 MAVROS。
+
+use_ai_velocity:=true
+  启用 AI 速度桥接和 MAVROS odometry 输入。
+
+enforce_gps_off:=true
+  自动设置 EKF2_GPS_CTRL=0 并注入 GPS off。
+
+run_mission:=false
+  等 GPS、VIO 和 AI 全部检查通过后，再手动运行任务脚本。
+
+GPS guard 成功后终端2应出现：
+
+GPS disabled: EKF2_GPS_CTRL=0 and HIL_GPS blocked
+
+如果没有看到这条消息，不得起飞。
+
+
+六、启动 AI 速度数据
+--------------------
+终端3运行真实 AI 节点。
+
+AI 节点必须发布：
+
+/drone0/ai_imu/velocity
+
+geometry_msgs/msg/Vector3Stamped
+
+速度单位为 m/s。
+频率建议为 50 至 100 Hz。
+
+仅测试数据链路时，可以临时发布零速度：
+
+ros2 topic pub -r 50 /drone0/ai_imu/velocity \
+  geometry_msgs/msg/Vector3Stamped \
+  "{header: {frame_id: drone0_base_link}, \
+    vector: {x: 0.0, y: 0.0, z: 0.0}}"
+
+这个零速度命令只用于验证话题和 EKF2 链路，
+不能用于验证真实 AI 速度精度。
+
+
+七、Echo GPS 数据
+-----------------
+先查看话题：
+
+ros2 topic list | grep -E 'gps|global_position'
+
+常用 GPS 话题：
+
+ros2 topic echo --once \
+  /drone0/mavros/global_position/raw/fix
+
+ros2 topic echo --once \
+  /drone0/mavros/global_position/global
+
+检查 GPS 消息频率：
+
+timeout 8 ros2 topic hz \
+  /drone0/mavros/global_position/raw/fix
+
+GPS 已经阻断时，该话题可能不产生新消息。
+以 PX4 的 EKF2 状态为准：
+
+listener estimator_status_flags
+
+必须为：
+
+cs_gps: False
+cs_gps_hgt: False
+
+也可以检查 PX4 原始 GPS：
+
+listener sensor_gps
+
+
+八、Echo VIO 数据
+-----------------
+VIO 在 iris_vision 中通过 Gazebo transport 直接进入 PX4，
+不经过 MAVROS 的 /imu 话题。
+
+查看 Gazebo VIO 话题：
+
+gz topic -l | grep vision_odom
+
+使用上一条命令找到的完整主题名查看 Gazebo VIO：
+
+gz topic -e <VIO主题名> -d 5
+
+例如主题名可能是：
+
+/gazebo/default/iris_vision/vision_odom
+
+也可以通过 PX4 查看：
+
+listener vehicle_visual_odometry
+
+VIO 正常时，该消息应持续更新。
+在 PX4 pxh> 执行 failure vio off 后，该消息停止更新。
+
+检查 VIO 融合状态：
+
+listener estimator_status_flags
+
+VIO 正常时：
+
+cs_ev_pos: True
+cs_ev_hgt: True
+cs_ev_vel: True
+
+VIO 中断后：
+
+cs_ev_pos: False
+cs_ev_hgt: False
+cs_ev_vel: True
+
+cs_ev_vel 仍为 True 是因为 AI 速度正在提供观测。
+
+
+九、Echo AI IMU 速度
+--------------------
+查看原始 AI 速度：
+
+ros2 topic echo --once /drone0/ai_imu/velocity
+
+查看频率：
+
+ros2 topic hz /drone0/ai_imu/velocity
+
+正常应约为 50 至 100 Hz。
+
+如果 AI 节点输出的是自己的复合消息，应先由 AI 节点提取速度，
+再发布 geometry_msgs/Vector3Stamped。
+不要把 GPS 字段转发给 MAVROS。
+
+
+十、Echo MAVROS 和 PX4 Odometry
+------------------------------
+AI 速度经桥接后的话题：
+
+ros2 topic echo --once \
+  /drone0/mavros/odometry/out
+
+只查看桥接速度：
+
+ros2 topic echo --once \
+  /drone0/mavros/odometry/out \
+  --field twist.twist.linear
+
+查看桥接频率：
+
+ros2 topic hz /drone0/mavros/odometry/out
+
+正常约为 50 Hz。
+
+从 PX4 返回的 ODOMETRY：
+
+ros2 topic echo --once \
+  /drone0/mavros/odometry/in
+
+PX4 当前局部里程计：
+
+ros2 topic echo --once \
+  /drone0/mavros/local_position/odom
+
+只查看位置：
+
+ros2 topic echo --once \
+  /drone0/mavros/local_position/odom \
+  --field pose.pose.position
+
+只查看速度：
+
+ros2 topic echo --once \
+  /drone0/mavros/local_position/odom \
+  --field twist.twist.linear
+
+查看频率：
+
+ros2 topic hz \
+  /drone0/mavros/local_position/odom
+
+
+十一、起飞前检查
+----------------
+在 PX4 pxh> 中执行：
+
+listener estimator_status_flags
+listener vehicle_local_position
+
+必须确认：
+
+cs_gps: False
+cs_gps_hgt: False
+cs_ev_pos: True
+cs_ev_hgt: True
+cs_ev_vel: True
+cs_inertial_dead_reckoning: False
+
+xy_valid: True
+v_xy_valid: True
+dead_reckoning: False
+
+同时确认：
+
+ros2 topic hz /drone0/ai_imu/velocity
+
+有持续数据。
+
+任何一项不满足，都不要起飞。
+
+
+十二、运行任务脚本
+------------------
+所有检查通过后，终端4执行：
+
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+python3 install/gestelt_bringup/share/gestelt_bringup/scenarios/empty_map.py
+
+任务脚本会发送：
+
+1. TAKEOFF。
+2. MISSION。
+3. 航点 (2, 2, 2)。
+4. 航点 (5, 5, 1)。
+
+检查姿态和 armed：
+
+ros2 topic echo --once /drone0/mavros/state
+
+飞行时应为：
+
+armed: true
+mode: OFFBOARD
+
+
+十三、飞行中让 VIO 失效
+-----------------------
+保持 AI 速度持续发布，并保持 GPS 关闭。
+
+在 PX4 pxh> 中执行：
+
+param set SYS_FAILURE_EN 1
+failure vio off
+
+应看到：
+
+CMD_INJECT_FAILURE, vio off
+
+立即检查：
+
+listener estimator_status_flags
+listener vehicle_local_position
+
+预期：
+
+cs_gps: False
+cs_ev_pos: False
+cs_ev_hgt: False
+cs_ev_vel: True
+cs_inertial_dead_reckoning: False
+xy_valid: True
+v_xy_valid: True
+dead_reckoning: False
+
+这表示 VIO 已失效，但 AI 速度仍在维持速度观测。
+
+如果停止 AI 速度，约 EKF2_NOAID_TOUT 后应变为：
+
+cs_ev_vel: False
+cs_inertial_dead_reckoning: True
+xy_valid: False
+v_xy_valid: False
+dead_reckoning: True
+
+随后 PX4 会根据 COM_POSCTL_NAVL 执行失效保护。
+
+
+十四、恢复 VIO 和降落
+---------------------
+实验结束后可以恢复 VIO：
+
+failure vio ok
+
+GPS 仍然保持关闭，不要执行：
+
+failure gps ok
+
+GPS 对照实验不属于本流程。
+
+通过 MAVROS 降落：
+
+ros2 service call /drone0/mavros/set_mode \
+  mavros_msgs/srv/SetMode \
+  "{base_mode: 0, custom_mode: 'AUTO.LAND'}"
+
+等待：
+
+ros2 topic echo --once /drone0/mavros/state
+
+确认：
+
+armed: false
+
+
+十五、关闭顺序
+--------------
+1. 停止 AI 速度节点。
+2. 停止任务脚本。
+3. 停止 Gestelt、RViz 和 MAVROS 终端。
+4. 最后停止 PX4 终端。
+5. PX4 会关闭它启动的 Gazebo。
+
+不要使用 kill -9。
+
+
+十六、已验证结果
+----------------
+1. gps_off_guard.py 能自动设置 EKF2_GPS_CTRL=0。
+2. gps_off_guard.py 能自动发送 GPS off。
+3. PX4 状态为 cs_gps=False。
+4. AI 速度以 50 Hz 经过 MAVROS ODOMETRY 输入 PX4。
+5. GPS、VIO 都关闭时，只要 AI 速度持续：
+   cs_ev_vel=True
+   xy_valid=True
+   v_xy_valid=True
+   cs_inertial_dead_reckoning=False
+6. 停止 AI 速度约 5 秒后：
+   cs_ev_vel=False
+   xy_valid=False
+   v_xy_valid=False
+   cs_inertial_dead_reckoning=True
+7. MAVROS odometry 插件和 FLU/FRD TF 工作正常。
+
+验证边界：
+
+- 上述第 5、6 项是在地面、未解锁状态下验证 EKF2 输入链路和有效性切换。
+- GPS-denied、仅 VIO 的飞行已经验证在 Takeoff detected 之后执行
+  failure vio off，随后 PX4 blind land。
+- “VIO 和 AI 速度同时在线、飞机已在空中、再关闭 VIO 并继续速度闭环”
+  这一完整空中交接实验仍需实际执行一次，不能仅凭地面数据宣称完成。
+
+
+十七、限制
+----------
+1. AI 速度是估计值，不是绝对真值。
+2. AI 速度长期漂移会导致 EKF2 跟随漂移。
+3. 只有速度观测时，绝对位置不可观测。
+4. 速度闭环可以保持，但位置会逐渐漂移。
+5. 本流程是仿真验证，不是实际飞行安全认证。
+6. 如果 AI 速度停止，invalid 和失效保护必须继续生效。
+
+
+十八、离线真实 IMU 数据
+-----------------------
+如果只运行自己的算法，可以直接回放 ROS 2 bag：
+
+ros2 bag info <bag目录>
+ros2 bag play <bag目录>
+
+不需要启动 Gazebo。
+
+如果要回放 PX4 EKF2，需要真实飞行 ULog：
+
+cd /home/cjc/ws_capstone/PX4-Autopilot
+export replay_mode=ekf2
+export replay=/absolute/path/flight.ulg
+make px4_sitl none
+
+ROS bag 不能直接作为 PX4 EKF2 replay 文件。
+若只有 200 Hz ROS IMU，建议先直接回放给离线算法；
+要做完整 EKF2 回放，应额外记录 PX4 ULog，或开发 ROS IMU 到
+ULog/HIL_SENSOR 的转换桥接。
+
+
+十九、tmux 分布式终端
+---------------------
+推荐使用 tmux 管理 PX4、Gestelt、AI 节点和任务脚本，因为它：
+
+1. 支持多个命名窗口和分屏。
+2. SSH 断开后任务可以继续运行。
+3. 支持日志滚动、复制和会话恢复。
+4. 不依赖桌面图形环境。
+
+当前已创建实验会话：
+
+tmux attach-session -t gestelt-ai
+
+当前为 2x2 四窗格：
+
+1 PX4 + Gazebo
+2 Gestelt + MAVROS + RViz
+3 AI velocity
+4 Mission / checks
+
+tmux 常用按键：
+
+Ctrl+b 方向键
+  切换窗格。
+
+Ctrl+b z
+  放大或恢复当前窗格。
+
+Ctrl+b d
+  暂时退出，进程继续运行。
+
+Ctrl+b [
+  进入复制模式，再用方向键和 PageUp 查看历史日志。
+
+Ctrl+b x
+  关闭当前窗格。
+
+从任意系统终端重新连接：
+
+tmux attach-session -t gestelt-ai
+
+如果桌面终端打不开 tmux，请使用 Ubuntu 的系统终端，
+不要使用继承了 VS Code Snap GTK/LD_LIBRARY_PATH 的终端。
+
+
+二十、推荐 terminal 分屏软件
+----------------------------
+1. tmux（首选）
+
+   已安装，适合本项目这种多进程、长时间运行、需要 SSH 的仿真。
+
+2. Terminator（GUI 首选）
+
+   Ubuntu 网格分屏最简单，支持拖拽布局和广播键盘输入。
+
+   sudo apt install terminator
+
+3. Tilix（GUI 可选）
+
+   支持平铺窗格、下拉终端和多标签。
+
+   sudo apt install tilix
+
+4. WezTerm（现代 GPU 终端）
+
+   支持标签、窗格、Lua 配置和跨平台；适合希望统一本地/远程配置的用户。
+
+本项目推荐组合：
+
+tmux + Terminator
+
+tmux 负责保证运行进程和会话稳定，Terminator 只作为桌面终端外壳。

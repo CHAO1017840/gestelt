@@ -1,32 +1,33 @@
 #ifndef _TRAJECTORY_SERVER_H_
 #define _TRAJECTORY_SERVER_H_
 
+#include <atomic>
 #include <numeric>
 #include <deque>
 
 #include <Eigen/Geometry> 
 
-#include <ros/ros.h>
+#include <gestelt_ros2_compat/ros.hpp>
 
-#include <geometry_msgs/PoseStamped.h>
-#include <geometry_msgs/Vector3.h>
-#include <nav_msgs/Odometry.h>
-#include <nav_msgs/Path.h>
-#include <mavros_msgs/PositionTarget.h>
-#include <mavros_msgs/CommandBool.h>
-#include <mavros_msgs/State.h>
-#include <mavros_msgs/SetMode.h>
-#include <std_msgs/Empty.h>
-#include <std_msgs/Int8.h>
-#include <std_msgs/Float32.h>
-#include <std_msgs/String.h>
-#include <trajectory_msgs/MultiDOFJointTrajectory.h>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/vector3.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <nav_msgs/msg/path.hpp>
+#include <mavros_msgs/msg/position_target.hpp>
+#include <mavros_msgs/srv/command_bool.hpp>
+#include <mavros_msgs/msg/state.hpp>
+#include <mavros_msgs/srv/set_mode.hpp>
+#include <std_msgs/msg/empty.hpp>
+#include <std_msgs/msg/int8.hpp>
+#include <std_msgs/msg/float32.hpp>
+#include <std_msgs/msg/string.hpp>
+#include <trajectory_msgs/msg/multi_dof_joint_trajectory.hpp>
 
-#include <gestelt_msgs/Command.h>
-#include <gestelt_msgs/CommanderState.h>
-#include <gestelt_msgs/ExecTrajectory.h>
+#include <gestelt_msgs/msg/command.hpp>
+#include <gestelt_msgs/msg/commander_state.hpp>
+#include <gestelt_msgs/msg/exec_trajectory.hpp>
 
-#include <visualization_msgs/Marker.h>
+#include <visualization_msgs/msg/marker.hpp>
 
 using namespace Eigen;
 
@@ -88,32 +89,32 @@ private: // Class Methods
   /**
    * @brief Callback for trajectory points from mav_trajectory_generation  
    */
-  void execTrajCb(const gestelt_msgs::ExecTrajectory::ConstPtr &msg);
+  void execTrajCb(const gestelt_msgs::ExecTrajectory::ConstSharedPtr &msg);
 
   /**
    * @brief Callback for Mavros state 
    */
-  void UAVStateCb(const mavros_msgs::State::ConstPtr &msg);
+  void UAVStateCb(const mavros_msgs::State::ConstSharedPtr &msg);
 
   /**
    * @brief Callback for UAV Pose
    */
-  void UAVPoseCB(const geometry_msgs::PoseStamped::ConstPtr &msg);
+  void UAVPoseCB(const geometry_msgs::PoseStamped::ConstSharedPtr &msg);
 
   /**
    * @brief Callback for UAV Odometry
    */
-  void UAVOdomCB(const nav_msgs::Odometry::ConstPtr &msg);
+  void UAVOdomCB(const nav_msgs::Odometry::ConstSharedPtr &msg);
 
   /**
    * @brief Callback for externally triggered server events
    */
-  void serverCommandCb(const gestelt_msgs::Command::ConstPtr & msg);
+  void serverCommandCb(const gestelt_msgs::Command::ConstSharedPtr & msg);
 
   /**
    * @brief Callback for externally triggered server events
    */
-  void swarmServerCommandCb(const std_msgs::Int8::ConstPtr & msg);
+  void swarmServerCommandCb(const std_msgs::Int8::ConstSharedPtr & msg);
 
   /**
    * Timer callback to extract PVA commands from subscribed plan for executing trajectory.
@@ -370,6 +371,7 @@ private: // Member variables
   double last_mission_yaw_{0.0}, last_mission_yaw_dot_{0.0};
 
   /* Flags */ 
+  std::atomic<bool> toggle_in_progress_{false};
   ros::Time last_traj_msg_time_{0}; // Time of last trajectory message
 
   bool first_pose_{true};

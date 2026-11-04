@@ -1,12 +1,12 @@
-#include "ros/ros.h"
+#include <gestelt_ros2_compat/ros.hpp>
 
 #include <pcl/point_types.h>
 #include <pcl/conversions.h>
 #include <pcl/io/pcd_io.h>
 
-#include <pcl_ros/point_cloud.h>
+#include <pcl_conversions/pcl_conversions.h>
 
-#include <sensor_msgs/PointCloud2.h>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 
 #define KNRM  "\033[0m"
 #define KRED  "\033[31m"

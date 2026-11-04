@@ -1,0 +1,95 @@
+/**/conn:
+  ros__parameters:
+    heartbeat_rate: 1.0
+    timeout: 10.0
+    timesync_rate: 10.0
+    system_time_rate: 1.0
+
+/**/time:
+  ros__parameters:
+    time_ref_source: fcu
+    timesync_mode: MAVLINK
+    timesync_avg_alpha: 0.6
+
+/**/cmd:
+  ros__parameters:
+    use_comp_id_system_control: false
+
+/**/global_position:
+  ros__parameters:
+    frame_id: world
+    child_frame_id: drone0_base_link
+    rot_covariance: 99999.0
+    gps_uere: 1.0
+    use_relative_alt: true
+    tf.send: false
+    tf.frame_id: world
+    tf.global_frame_id: earth
+    tf.child_frame_id: drone0_base_link
+
+/**/imu:
+  ros__parameters:
+    frame_id: drone0_base_link
+    linear_acceleration_stdev: 0.0003
+    angular_velocity_stdev: 0.0003490659
+    orientation_stdev: 1.0
+    magnetic_stdev: 0.0
+
+/**/local_position:
+  ros__parameters:
+    frame_id: world
+    tf.send: true
+    tf.frame_id: world
+    tf.child_frame_id: drone0_base_link
+    tf.send_fcu: false
+
+/**/odometry:
+  ros__parameters:
+    fcu.odom_parent_id_des: world
+    fcu.odom_child_id_des: drone0_base_link
+    fcu.map_id_des: map
+
+/**/setpoint_accel:
+  ros__parameters:
+    send_force: false
+
+/**/setpoint_attitude:
+  ros__parameters:
+    reverse_thrust: false
+    use_quaternion: false
+    tf.listen: false
+    tf.frame_id: world
+    tf.child_frame_id: target_attitude
+    tf.rate_limit: 50.0
+
+/**/setpoint_raw:
+  ros__parameters:
+    thrust_scaling: 1.0
+
+/**/setpoint_position:
+  ros__parameters:
+    tf.listen: false
+    tf.frame_id: world
+    tf.child_frame_id: target_position
+    tf.rate_limit: 50.0
+    mav_frame: LOCAL_NED
+
+/**/setpoint_velocity:
+  ros__parameters:
+    mav_frame: LOCAL_NED
+
+/**/vision_pose:
+  ros__parameters:
+    tf.listen: false
+    tf.frame_id: world
+    tf.child_frame_id: vision_estimate
+    tf.rate_limit: 10.0
+
+/**/vision_speed:
+  ros__parameters:
+    listen_twist: true
+    twist_cov: true
+
+/**/vibration:
+  ros__parameters:
+    frame_id: drone0_base_link

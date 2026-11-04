@@ -134,6 +134,7 @@ optimization:
 ##### Mapping params
 grid_map:
   print_timers: false
+  sensor_timeout: 3.0                  # [s] Tolerate bursty PCD-backed fake sensors
 
   global_map:
     size_x: 50.0

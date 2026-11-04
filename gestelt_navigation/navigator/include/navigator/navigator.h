@@ -4,33 +4,34 @@
 #include <navigator/navigator_helper.h>
 
 #include <algorithm>
+#include <mutex>
 #include <unordered_map>
 
 #include <Eigen/Eigen>
 
-#include <ros/ros.h>
-#include <geometry_msgs/Pose.h>
-#include <geometry_msgs/PoseStamped.h>
-#include <nav_msgs/Odometry.h>
-#include <std_msgs/Empty.h>
-#include <std_msgs/Int32.h>
+#include <gestelt_ros2_compat/ros.hpp>
+#include <geometry_msgs/msg/pose.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <std_msgs/msg/empty.hpp>
+#include <std_msgs/msg/int32.hpp>
 
 /* Planning messages */
-#include <gestelt_msgs/Command.h>
-#include <gestelt_msgs/Goals.h>
-#include <gestelt_msgs/SphericalSFCTrajectory.h>
-#include <traj_utils/PolyTraj.h>
-#include <traj_utils/MINCOTraj.h>
+#include <gestelt_msgs/msg/command.hpp>
+#include <gestelt_msgs/msg/goals.hpp>
+#include <gestelt_msgs/msg/spherical_sfc_trajectory.hpp>
+#include <traj_utils/msg/poly_traj.hpp>
+#include <traj_utils/msg/minco_traj.hpp>
 
 /* Visualization */
-#include <decomp_ros_msgs/PolyhedronArray.h>
+#include <decomp_ros_msgs/msg/polyhedron_array.hpp>
 #include <traj_utils/planning_visualization.h>
-#include <visualization_msgs/Marker.h>
+#include <visualization_msgs/msg/marker.hpp>
 
 /* Debugging */
-#include <gestelt_debug_msgs/BackEndTrajectoryDebug.h>
-#include <gestelt_debug_msgs/SFCTrajectory.h>
-#include <gestelt_debug_msgs/SFCSegment.h>
+#include <gestelt_debug_msgs/msg/back_end_trajectory_debug.hpp>
+#include <gestelt_debug_msgs/msg/sfc_trajectory.hpp>
+#include <gestelt_debug_msgs/msg/sfc_segment.hpp>
 #include <logger/timer.h>
 
 /* Trajectory representation */
@@ -296,6 +297,7 @@ private:
    */
   void singleGoalCB(const geometry_msgs::PoseStampedConstPtr& msg)
   {
+    std::lock_guard<std::recursive_mutex> lock(planner_mutex_);
     logInfo(str_fmt("Received debug goal (%f, %f, %f). Note: position.z is set to default of 1.0m", 
           msg->pose.position.x,
           msg->pose.position.y,
@@ -318,6 +320,7 @@ private:
    */
   void goalsCB(const gestelt_msgs::GoalsConstPtr &msg)
   {
+    std::lock_guard<std::recursive_mutex> lock(planner_mutex_);
     if (msg->transforms.size() <= 0)
     {
       logError("Received empty waypoints");
@@ -345,7 +348,7 @@ private:
    * 
    * @param msg 
    */
-  void swarmMincoTrajCB(const traj_utils::MINCOTrajConstPtr &msg);
+  void swarmMincoTrajCB(const std::shared_ptr<const traj_utils::msg::MINCOTraj> &msg);
 
   /**
    * @brief callback to debug topic for setting starting point of plan
@@ -354,6 +357,7 @@ private:
    */
   void debugStartCB(const geometry_msgs::PoseConstPtr &msg)
   {
+    std::lock_guard<std::recursive_mutex> lock(planner_mutex_);
     logInfo(str_fmt("Received debug start (%f, %f, %f)", 
           msg->position.x,
           msg->position.y,
@@ -371,6 +375,7 @@ private:
    */
   void debugGoalCB(const geometry_msgs::PoseConstPtr &msg)
   {
+    std::lock_guard<std::recursive_mutex> lock(planner_mutex_);
     logInfo(str_fmt("Received debug goal (%f, %f, %f)", 
           msg->position.x,
           msg->position.y,
@@ -389,6 +394,7 @@ private:
    */
   void planOnDemandCB(const std_msgs::EmptyConstPtr &msg)
   {
+    std::lock_guard<std::recursive_mutex> lock(planner_mutex_);
     logInfo(str_fmt("Planning on demand triggered! from (%f, %f, %f) to (%f, %f, %f)",
       cur_pos_(0), cur_pos_(1), cur_pos_(2),
       waypoints_.nextWP()(0), waypoints_.nextWP()(1), waypoints_.nextWP()(2))
@@ -452,7 +458,7 @@ private:
    * @param msg 
    * @param traj 
    */
-  void mincoMsgToTraj(const traj_utils::MINCOTraj &msg, ego_planner::LocalTrajData& traj);
+  void mincoMsgToTraj(const traj_utils::msg::MINCOTraj &msg, ego_planner::LocalTrajData& traj);
 
   /**
    * @brief Convert MJO trajectory to MINCO message
@@ -463,7 +469,7 @@ private:
    * @param MINCO_msg 
    */
   void mjoToMsg(const poly_traj::MinJerkOpt& mjo, const double& traj_start_time,
-                traj_utils::PolyTraj &poly_msg, traj_utils::MINCOTraj &MINCO_msg);
+                traj_utils::msg::PolyTraj &poly_msg, traj_utils::msg::MINCOTraj &MINCO_msg);
 
   /**
    * @brief Get local trajectory from poly_traj::MinJerkOpt
@@ -655,7 +661,7 @@ private: /* Params */
   bool local_traj_exists_{false};
 
   /* Mutex*/
-  std::mutex planner_mutex_; // Planner mutex
+  std::recursive_mutex planner_mutex_; // Serializes planner state and ROS callbacks
 
 
 private: /* Logging functions */

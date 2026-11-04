@@ -1,59 +1,40 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.8)
 project(sfc_generation)
 
-set(CMAKE_BUILD_TYPE "Release")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
-
-add_compile_options(-std=c++17)
-
-set(ROS_LIBRARIES
-  roscpp
-  grid_map
-  decomp_ros_msgs
-  convex_decomp_util
-  jps3d
-)
-
-find_package(decomp_util)
-
-## Find catkin macros and libraries
-## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
-## is used, also find other catkin packages
-find_package(catkin REQUIRED COMPONENTS
-  ${ROS_LIBRARIES}
-)
+find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(gestelt_compat REQUIRED)
+find_package(grid_map REQUIRED)
+find_package(jps3d REQUIRED)
+find_package(decomp_util REQUIRED)
+find_package(convex_decomp_util REQUIRED)
+find_package(decomp_ros_msgs REQUIRED)
 
-###################################
-## catkin specific configuration ##
-###################################
-catkin_package(
- INCLUDE_DIRS include
- LIBRARIES ${PROJECT_NAME} # Exported libraries
- CATKIN_DEPENDS decomp_ros_msgs  convex_decomp_util # Export grid_map as part of this package
-#  DEPENDS decomp_util 
+add_library(${PROJECT_NAME} SHARED src/spherical_sfc.cpp src/polytope_sfc.cpp)
+target_include_directories(${PROJECT_NAME} PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
+target_link_libraries(${PROJECT_NAME} PUBLIC
+  gestelt_compat::gestelt_compat
+  grid_map::grid_map
+  jps3d::jps3d
+  decomp_util::decomp_util
+  convex_decomp_util::convex_decomp_util
+  ${decomp_ros_msgs_TARGETS}
+  Eigen3::Eigen
 )
 
-###########
-## Build ##
-###########
-
-## Specify additional locations of header files
-## Your package locations should be listed before other locations
-include_directories(
-  include
-  ${catkin_INCLUDE_DIRS}
-  ${EIGEN3_INCLUDE_DIRS} 
-  ${DECOMP_UTIL_INCLUDE_DIRS} 
+install(DIRECTORY include/ DESTINATION include)
+install(TARGETS ${PROJECT_NAME}
+  EXPORT ${PROJECT_NAME}Targets
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin
 )
-
-## Declare a C++ library
-add_library( ${PROJECT_NAME} 
-  src/spherical_sfc.cpp
-  src/polytope_sfc.cpp
+ament_export_targets(${PROJECT_NAME}Targets HAS_LIBRARY_TARGET NAMESPACE ${PROJECT_NAME}::)
+ament_export_dependencies(
+  Eigen3 gestelt_compat grid_map jps3d decomp_util convex_decomp_util decomp_ros_msgs
 )
-
-## Specify libraries to link a library or executable target against
-target_link_libraries( ${PROJECT_NAME}
-  ${catkin_LIBRARIES}
-)
+ament_package()

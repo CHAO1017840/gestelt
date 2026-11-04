@@ -1,0 +1,261 @@
+Gestelt / PX4 GPS-denied VIO 失效测试
+====================================
+更新时间：2026-10-24
+适用环境：PX4 SITL + Gazebo Classic + EKF2
+
+
+一、实验定义
+------------
+本实验只改变 VIO 状态，GPS 必须从起飞前到实验结束始终关闭。
+
+正确条件：
+
+GPS：OFF
+VIO：起飞前 ON，飞行中再注入 OFF
+
+这样才能验证 GPS-denied 条件下失去 VIO 后的 EKF2 行为。
+
+不要执行：
+
+EKF2_GPS_CTRL=7
+failure gps ok
+
+否则 GPS 会接管水平位置和速度，VIO 失效不会导致导航失效。
+
+本机已按该条件完成一次完整飞行验证：
+
+起飞前：
+  cs_gps=False
+  cs_ev_pos=True
+  cs_ev_vel=True
+  xy_valid=True
+  v_xy_valid=True
+
+飞行中执行 failure vio off 后：
+  cs_gps=False
+  cs_ev_pos=False
+  cs_ev_vel=False
+  cs_ev_hgt=False
+  cs_inertial_dead_reckoning=True
+  xy_valid=False
+  v_xy_valid=False
+
+PX4 随后触发 blind land 并自动上锁。GPS 在实验全过程中保持关闭。
+
+如果实验中还需要用 AI 速度维持速度闭环，请看：
+AI速度回退说明.txt
+
+该方案通过 AI 速度持续为 EKF2 提供外部速度观测，
+不会关闭 velocity invalid 检查。
+
+
+二、使用模型
+------------
+必须使用带 Gazebo external vision 的 iris_vision：
+
+cd /home/cjc/ws_capstone/PX4-Autopilot
+export GAZEBO_IP=127.0.0.1
+export GAZEBO_MASTER_URI=http://127.0.0.1:11345
+make px4_sitl gazebo-classic_iris_vision
+
+普通 iris 没有发布 vehicle_visual_odometry，不能做本实验。
+
+本工作区已经修复 iris_vision airframe 的错误引用：
+10016_gazebo-classic_iris
+改为：
+10016_none_iris
+
+
+三、起飞前关闭 GPS
+------------------
+在 PX4 pxh> 终端依次执行：
+
+param set EKF2_GPS_CTRL 0
+param set SYS_FAILURE_EN 1
+failure gps off
+
+第一项禁止 EKF2 融合 GPS。
+第二、三项从 simulator_mavlink 输入处阻断 HIL_GPS。
+两者同时使用，确保整个实验过程中没有 GPS。
+
+检查参数：
+
+param show EKF2_EV_CTRL
+param show EKF2_HGT_REF
+param show EKF2_GPS_CTRL
+param show EKF2_EV_DELAY
+param show EKF2_NOAID_TOUT
+
+应为：
+
+EKF2_EV_CTRL=15
+EKF2_HGT_REF=3
+EKF2_GPS_CTRL=0
+EKF2_EV_DELAY=5
+EKF2_NOAID_TOUT=5000000
+
+EKF2_HGT_REF 是重启生效参数。iris_vision airframe 默认设置为 3，
+如果实际值不是 3，应设置后保存并重启 SITL：
+
+param set EKF2_HGT_REF 3
+param save
+
+重启后需要重新执行关闭 GPS 的三条命令。
+
+
+四、确认 VIO 正常、GPS 已关闭
+-----------------------------
+在 pxh> 中执行：
+
+listener vehicle_visual_odometry
+listener estimator_status_flags
+listener vehicle_local_position
+
+required conditions before takeoff:
+
+cs_gps: False
+cs_gps_hgt: False
+cs_ev_pos: True
+cs_ev_vel: True
+cs_ev_hgt: True
+cs_inertial_dead_reckoning: False
+
+vehicle_local_position:
+
+xy_valid: True
+v_xy_valid: True
+dead_reckoning: False
+
+同时 vehicle_visual_odometry 必须持续有数据。若视觉数据不更新，
+不要起飞。
+
+
+五、启动 Gestelt
+----------------
+另开终端：
+
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 launch gestelt_bringup scenario_ros2.launch.py \
+  scenario:=empty_map \
+  run_mission:=true \
+  use_rviz:=true \
+  use_gazebo:=false \
+  use_fake_drone:=false \
+  use_mavros:=true \
+  mavros_fcu_url:=udp://:14540@127.0.0.1:14580
+
+此时 PX4 只能依靠 VIO 提供水平位置和速度。
+等待飞机解锁、进入 OFFBOARD 并离地。
+
+
+六、飞行中让 VIO 失效
+---------------------
+在 PX4 pxh> 中执行：
+
+param set SYS_FAILURE_EN 1
+failure vio off
+
+日志应出现：
+
+CMD_INJECT_FAILURE, vio off
+
+该命令会在 visual odometry 发布到 EKF2 之前阻断数据，
+不会改动 GPS，也不会把 GPS 重新打开。
+
+
+七、预期 EKF2 状态变化
+----------------------
+VIO 刚关闭时：
+
+cs_ev_pos: False
+cs_ev_vel: False
+cs_ev_hgt: False
+cs_gps: False
+
+经过 EKF2_NOAID_TOUT，默认约 5 秒后：
+
+cs_inertial_dead_reckoning: True
+xy_valid: False
+v_xy_valid: False
+dead_reckoning: True
+
+此时 EKF2 没有 GPS，也没有 VIO，无法继续约束水平速度和位置。
+这不是估计器“误报 invalid”，而是真实的可观测性丢失。
+
+
+八、PX4 位置控制失效保护
+------------------------
+位置/速度 invalid 后，PX4 根据 COM_POSCTL_NAVL 退出位置控制：
+
+COM_POSCTL_NAVL=0
+  降级为 Altitude/Manual
+
+COM_POSCTL_NAVL=1
+  切换到 Land/Descend
+
+可以在实验前查看：
+
+param show COM_POSCTL_NAVL
+
+SITL 中如果希望 VIO 失效后自动降落，可先设置：
+
+param set COM_POSCTL_NAVL 1
+
+不要在真实飞行中无保护地做这个实验。
+
+
+九、恢复 VIO
+------------
+GPS 仍然保持关闭时，在 pxh> 中执行：
+
+failure vio ok
+
+日志应出现：
+
+CMD_INJECT_FAILURE, vio ok
+
+随后检查：
+
+listener estimator_status_flags
+listener vehicle_local_position
+
+cs_ev_pos、cs_ev_vel、cs_ev_hgt 应恢复为 True。
+EKF2 可能需要位置重置才能重新获得 xy_valid 和 v_xy_valid。
+
+实验期间仍然不要执行：
+
+failure gps ok
+
+否则 GPS 会重新参与导航，破坏实验的单一变量条件。
+
+
+十、关键区别
+------------
+failure gps off
+  断 GPS，VIO 仍工作，不是 VIO 失效。
+
+failure vio off
+  断 VIO，GPS 状态不变。
+
+GPS_CTRL=0 + failure gps off + failure vio off
+  GPS-denied 环境下的 VIO 失效，这是本实验。
+
+EKF2_NOAID_TOUT
+  只决定多久后报告 invalid，不能产生新的速度观测。
+
+
+十一、记录状态
+--------------
+建议在 VIO 失效前后分别记录：
+
+listener estimator_status_flags
+listener vehicle_local_position
+
+ros2 topic echo --once /drone0/mavros/state
+ros2 topic echo --once /drone0/mavros/local_position/odom
+
+PX4 ULog 也会记录 EKF2 状态、VIO 数据和失效保护事件，
+用于后续绘制和分析。

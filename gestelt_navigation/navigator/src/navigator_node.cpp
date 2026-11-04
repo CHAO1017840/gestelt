@@ -12,7 +12,7 @@ int main(int argc, char **argv)
 
   navigator.init(nh, pnh);
 
-  ros::MultiThreadedSpinner spinner(4);
+  ros::MultiThreadedSpinner spinner(1);
   spinner.spin();
 
   return 0;

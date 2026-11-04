@@ -3,7 +3,7 @@
 
 #include <global_planner/planner_base.h>
 
-#include <ros/ros.h>
+#include <gestelt_ros2_compat/ros.hpp>
 
 #include <grid_map/grid_map.h>
 

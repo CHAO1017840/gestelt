@@ -2,6 +2,7 @@
 #define FAKE_MAP_H
 
 #include <mutex>
+#include <memory>
 
 #include <Eigen/Dense>
 
@@ -9,15 +10,15 @@
 #include <pcl/conversions.h>
 #include <pcl/common/transforms.h>
 #include <pcl/filters/voxel_grid.h>
-#include <pcl_ros/point_cloud.h>
+#include <pcl_conversions/pcl_conversions.h>
 
-#include <ros/ros.h>
+#include <gestelt_ros2_compat/ros.hpp>
 
-#include <geometry_msgs/PoseStamped.h>
-#include <sensor_msgs/PointCloud2.h>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 
-#include <tf/tf.h>
 #include <tf2_ros/transform_listener.h>
+#include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_broadcaster.h>
 
 #include <fake_map/fake_laser.h>
@@ -47,7 +48,7 @@ class FakeSensor
         void sensorUpdateTimerCB(const ros::TimerEvent &);
 
         /* Subscription callbacks */
-        // void poseCB(const geometry_msgs::PoseStamped::ConstPtr &msg);
+        // void poseCB(const geometry_msgs::PoseStamped::ConstSharedPtr &msg);
 
     private:
         FakeLaser fake_laser_; // Laser object for rendering fake point clouds
@@ -60,7 +61,8 @@ class FakeSensor
         ros::Timer sensor_update_timer_; // Timer for updating sensor output
 
         // TF transformation 
-        tf2_ros::Buffer tfBuffer_;
+        std::shared_ptr<tf2_ros::Buffer> tfBuffer_;
+        rclcpp::Node::SharedPtr node_;
         std::unique_ptr<tf2_ros::TransformListener> tfListener_;
 
         geometry_msgs::TransformStamped sens_to_gbl_tf_; // sensor to global frame transform

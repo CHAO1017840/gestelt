@@ -21,6 +21,7 @@ FakeDrone::FakeDrone(ros::NodeHandle& nh, ros::NodeHandle& pnh) {
 	pnh.param<bool>("start_in_offboard", start_in_offboard_, false);
 
 	node_name_ = "fake_drone" + std::to_string(drone_id_);
+	tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(nh.node_ptr());
 	
 	/* Subscribers and publishers*/
 
@@ -92,7 +93,7 @@ FakeDrone::~FakeDrone()
 
 /* Subscriber Callbacks*/
 
-void FakeDrone::setpointRawCmdCb(const mavros_msgs::PositionTarget::ConstPtr &msg)
+void FakeDrone::setpointRawCmdCb(const mavros_msgs::PositionTarget::ConstSharedPtr &msg)
 {	
 	if (!isUAVReady()){
 		ROS_WARN_THROTTLE_NAMED(1.0, node_name_, "UAV is not ready (i.e armed and OFFBOARD mode), ignoring command");
@@ -175,7 +176,7 @@ void FakeDrone::simUpdateTimer(const ros::TimerEvent &)
 
 		o_to_bl_tf.transform.rotation = cur_pose_.pose.pose.orientation;
 		
-		tf_broadcaster_.sendTransform(o_to_bl_tf);
+		tf_broadcaster_->sendTransform(o_to_bl_tf);
 
 		last_tf_broadcast_time_ = ros::Time::now();
 	}

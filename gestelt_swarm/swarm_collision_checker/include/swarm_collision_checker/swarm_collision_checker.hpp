@@ -1,11 +1,11 @@
 #ifndef _SWARM_COLLISION_CHECKER_H_
 #define _SWARM_COLLISION_CHECKER_H_
 
-#include <ros/ros.h>
+#include <gestelt_ros2_compat/ros.hpp>
 #include <eigen3/Eigen/Eigen>
 
-#include <visualization_msgs/Marker.h>
-#include <geometry_msgs/PoseStamped.h>
+#include <visualization_msgs/msg/marker.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 
 #include "nanoflann.hpp" // For nearest neighbors queries
 #include "KDTreeVectorOfVectorsAdaptor.h" // For nearest neighbors queries
@@ -38,7 +38,10 @@ public:
       std::string pose_topic_indiv = std::string("/drone" + std::to_string(i) + "/" + pose_topic);
 
       ros::Subscriber pose_sub = nh.subscribe<geometry_msgs::PoseStamped>(
-        pose_topic_indiv, 5, boost::bind(&SwarmCollisionChecker::poseCB, this, _1, i));
+        pose_topic_indiv, 5,
+        [this, i](const geometry_msgs::PoseStamped::ConstSharedPtr & msg) {
+          poseCB(msg, i);
+        });
 
       drones_pose_sub_.push_back(pose_sub);
 
@@ -53,7 +56,7 @@ public:
 
 private: 
   // Subscribe to robot pose
-  void poseCB(const geometry_msgs::PoseStamped::ConstPtr &msg, int drone_id)
+  void poseCB(const geometry_msgs::PoseStamped::ConstSharedPtr &msg, int drone_id)
   {
     // ROS_INFO("[SwarmCollisionChecker]: Pose callback for drone %d", drone_id);
     (*drone_poses_)[drone_id] = Eigen::Vector3d{msg->pose.position.x,  msg->pose.position.y,  msg->pose.position.z};

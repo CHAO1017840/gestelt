@@ -1,6 +1,10 @@
 devel/
 logs/
 build/
+install/
+log/
+__pycache__/
+*.py[cod]
 bin/
 lib/
 msg_gen/

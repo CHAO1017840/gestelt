@@ -2,8 +2,8 @@
 #define _DYN_A_STAR_H_
 
 #include <iostream>
-#include <ros/ros.h>
-#include <ros/console.h>
+#include <gestelt_ros2_compat/ros.hpp>
+#include <gestelt_ros2_compat/ros.hpp>
 #include <Eigen/Eigen>
 #include <grid_map/grid_map.h>
 #include <queue>

@@ -2,23 +2,23 @@
 #define FAKE_DRONE_H
 
 #include <mutex>
+#include <memory>
 // #include <random>
 #include <Eigen/Dense>
 
-#include <ros/ros.h>
+#include <gestelt_ros2_compat/ros.hpp>
 
-#include <nav_msgs/Odometry.h>
+#include <nav_msgs/msg/odometry.hpp>
 
-#include <geometry_msgs/Quaternion.h>
-#include <geometry_msgs/PoseStamped.h>
-#include <geometry_msgs/Vector3.h>
+#include <geometry_msgs/msg/quaternion.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/vector3.hpp>
 
-#include <mavros_msgs/PositionTarget.h>
-#include <mavros_msgs/State.h>
-#include <mavros_msgs/CommandBool.h>
-#include <mavros_msgs/SetMode.h>
+#include <mavros_msgs/msg/position_target.hpp>
+#include <mavros_msgs/msg/state.hpp>
+#include <mavros_msgs/srv/command_bool.hpp>
+#include <mavros_msgs/srv/set_mode.hpp>
 
-#include <tf/tf.h>
 #include <tf2_ros/transform_broadcaster.h>
 
 #define KNRM  "\033[0m"
@@ -94,7 +94,7 @@ class FakeDrone
         MavrosState mavros_state_{false, "AUTO.LOITER"};
 
         // TF transformation 
-        tf2_ros::TransformBroadcaster tf_broadcaster_;
+        std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
         // Unused: color for the trajectory using random values
         // Eigen::Vector4d color_vect_;
@@ -114,7 +114,7 @@ class FakeDrone
 
         // Callback for UAV commands
         void setpointRawCmdCb(
-            const mavros_msgs::PositionTarget::ConstPtr &msg);
+            const mavros_msgs::PositionTarget::ConstSharedPtr &msg);
 
         /* Service callbacks */
         bool armSrvCb(mavros_msgs::CommandBool::Request &req,

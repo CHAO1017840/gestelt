@@ -1,64 +1,16 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.8)
 project(radxa_utils)
 
-add_compile_options(-std=c++14)
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(gestelt_compat REQUIRED)
 
-set (ROS_LIBRARIES
-  roscpp
-  std_msgs
-)
+add_executable(listener src/listener.cpp)
+add_executable(talker src/talker.cpp)
+target_link_libraries(listener PRIVATE gestelt_compat::gestelt_compat rclcpp::rclcpp)
+target_link_libraries(talker PRIVATE gestelt_compat::gestelt_compat rclcpp::rclcpp)
 
-# set (ROS_DEPENDS
-
-# )
-
-find_package(catkin REQUIRED COMPONENTS
-  ${ROS_LIBRARIES}
-)
-
-## System dependencies are found with CMake's conventions
-# find_package(Boost REQUIRED COMPONENTS system)
-
-## Uncomment this if the package has a setup.py. This macro ensures
-## modules and global scripts declared therein get installed
-## See http://ros.org/doc/api/catkin/html/user_guide/setup_dot_py.html
-# catkin_python_setup()
-
-###################################
-## catkin specific configuration ##
-###################################
-## The catkin_package macro generates cmake config files for your package
-## Declare things to be passed to dependent projects
-## INCLUDE_DIRS: uncomment this if your package contains header files
-## LIBRARIES: libraries you create in this project that dependent projects also need
-## CATKIN_DEPENDS: catkin_packages dependent projects also need
-## DEPENDS: system dependencies of this project that dependent projects also need
-catkin_package(
-#  INCLUDE_DIRS include
-#  LIBRARIES gestelt_mapping
-  # CATKIN_DEPENDS ${ROS_DEPENDS}
-#  DEPENDS system_lib
-)
-
-###########
-## Build ##
-###########
-
-## Specify additional locations of header files
-## Your package locations should be listed before other locations
-include_directories(
-# include
-  ${catkin_INCLUDE_DIRS}
-)
-
-# add_executable(listener src/listener.cpp)
-# add_dependencies(listener ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-# target_link_libraries(listener
-#   ${catkin_LIBRARIES}
-# )
-
-# add_executable(talker src/talker.cpp)
-# add_dependencies(talker ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-# target_link_libraries(talker
-#   ${catkin_LIBRARIES}
-# )
+install(TARGETS listener talker DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+ament_export_dependencies(rclcpp gestelt_compat)
+ament_package()

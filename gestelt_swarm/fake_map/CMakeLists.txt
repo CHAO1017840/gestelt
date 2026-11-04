@@ -1,95 +1,64 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.8)
 project(fake_map)
 
-# set(CMAKE_CXX_STANDARD 17)
-# set(CMAKE_CXX_FLAGS "-std=c++17")
-set(CMAKE_BUILD_TYPE "Release")
-add_compile_options(-std=c++17)
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
-
-
-set (ROS_LIBRARIES
-  roscpp
-  geometry_msgs
-  pcl_ros
-  sensor_msgs
-  tf2_ros
-)
-
-# set (ROS_DEPENDS
-# )
-
-## Find catkin macros and libraries
-## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
-## is used, also find other catkin packages
-find_package(catkin REQUIRED COMPONENTS
-  ${ROS_LIBRARIES}
-)
-
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(pcl_conversions REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(PCL REQUIRED)
+find_package(gestelt_compat REQUIRED)
 
-###################################
-## catkin specific configuration ##
-###################################
-## The catkin_package macro generates cmake config files for your package
-## Declare things to be passed to dependent projects
-## INCLUDE_DIRS: uncomment this if your package contains header files
-## LIBRARIES: libraries you create in this project that dependent projects also need
-## CATKIN_DEPENDS: catkin_packages dependent projects also need
-## DEPENDS: system dependencies of this project that dependent projects also need
-catkin_package(
- INCLUDE_DIRS include
-#  CATKIN_DEPENDS ${ROS_DEPENDS}
-)
+include_directories(${pcl_conversions_INCLUDE_DIRS})
 
-###########
-## Build ##
-###########
-
-include_directories(
-  include
-  ${catkin_INCLUDE_DIRS}
-  ${EIGEN3_INCLUDE_DIR}
-  ${PCL_INCLUDE_DIRS}
-)
-
-add_library(fake_laser 
-  src/fake_laser.cpp
-)
-
+add_library(fake_laser SHARED src/fake_laser.cpp)
 target_include_directories(fake_laser PUBLIC
-  ${catkin_INCLUDE_DIRS}
-  ${EIGEN3_INCLUDE_DIRS}
-  ${PCL_INCLUDE_DIRS}
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
 )
+target_compile_features(fake_laser PUBLIC cxx_std_17)
+target_link_libraries(fake_laser PUBLIC Eigen3::Eigen ${PCL_LIBRARIES})
 
-target_link_libraries(fake_laser
-  Eigen3::Eigen
-)
-
-add_executable (fake_sensor_node
-  src/fake_sensor_node.cpp
-  src/fake_sensor.cpp
-)
-target_link_libraries(fake_sensor_node
-  ${catkin_LIBRARIES}
-  ${PCL_LIBRARIES}
+add_executable(fake_sensor_node src/fake_sensor_node.cpp src/fake_sensor.cpp)
+target_include_directories(fake_sensor_node PRIVATE include)
+target_compile_features(fake_sensor_node PRIVATE cxx_std_17)
+target_link_libraries(fake_sensor_node PRIVATE
+  gestelt_compat::gestelt_compat
   fake_laser
-)
-
-add_executable (fake_map_publisher
-  src/fake_map_publisher.cpp
-)
-target_link_libraries(fake_map_publisher
-  ${catkin_LIBRARIES}
+  tf2_ros::tf2_ros
+  ${pcl_conversions_LIBRARIES}
+  rclcpp::rclcpp
+  Eigen3::Eigen
   ${PCL_LIBRARIES}
 )
 
-add_executable (fake_map_generator
-  src/fake_map_generator.cpp
-)
-target_link_libraries(fake_map_generator
-  ${catkin_LIBRARIES}
+add_executable(fake_map_publisher src/fake_map_publisher.cpp)
+target_compile_features(fake_map_publisher PRIVATE cxx_std_17)
+target_link_libraries(fake_map_publisher PRIVATE
+  gestelt_compat::gestelt_compat
+  ${pcl_conversions_LIBRARIES}
+  rclcpp::rclcpp
   ${PCL_LIBRARIES}
 )
+
+add_executable(fake_map_generator src/fake_map_generator.cpp)
+target_compile_features(fake_map_generator PRIVATE cxx_std_17)
+target_link_libraries(fake_map_generator PRIVATE
+  gestelt_compat::gestelt_compat
+  rclcpp::rclcpp
+  ${PCL_LIBRARIES}
+)
+
+install(DIRECTORY include/ DESTINATION include)
+install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+install(TARGETS fake_laser
+  EXPORT ${PROJECT_NAME}Targets
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+)
+install(TARGETS fake_sensor_node fake_map_publisher fake_map_generator
+  DESTINATION lib/${PROJECT_NAME}
+)
+ament_export_targets(${PROJECT_NAME}Targets HAS_LIBRARY_TARGET NAMESPACE ${PROJECT_NAME}::)
+ament_export_dependencies(rclcpp tf2_ros pcl_conversions Eigen3 gestelt_compat)
+ament_package()

@@ -5,7 +5,7 @@
 
 #include <Eigen/Eigen>
 
-#include <ros/ros.h>
+#include <gestelt_ros2_compat/ros.hpp>
 
 #include <traj_utils/plan_container.hpp>
 #include <traj_utils/planning_visualization.h>

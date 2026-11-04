@@ -1,5 +1,5 @@
 #include <iostream>
-#include <ros/ros.h>
+#include <gestelt_ros2_compat/ros.hpp>
 #include <fake_map/fake_sensor.h>
 
 int main (int argc, char** argv) 

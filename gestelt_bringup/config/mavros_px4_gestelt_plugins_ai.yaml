@@ -1,0 +1,9 @@
+/**:
+  ros__parameters:
+    plugin_denylist:
+      - safety_area
+      - image_pub
+      - vibration
+      - distance_sensor
+      - rangefinder
+      - wheel_odometry

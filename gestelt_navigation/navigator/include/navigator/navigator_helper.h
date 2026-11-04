@@ -4,8 +4,8 @@
 #include <Eigen/Eigen>
 #include <memory>
 
-#include <ros/ros.h>
-#include <visualization_msgs/Marker.h>
+#include <gestelt_ros2_compat/ros.hpp>
+#include <visualization_msgs/msg/marker.hpp>
 
 class Waypoint
 {

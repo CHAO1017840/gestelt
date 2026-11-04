@@ -1,0 +1,292 @@
+Gestelt Ubuntu 22.04 + ROS 2 Humble 环境配置和依赖
+====================================================
+文档更新时间：2026-10-24
+
+本文档只说明系统环境、依赖安装、PX4 SITL 准备和编译。
+实际启动顺序、Gazebo/RViz 操作、任务脚本和故障排查请阅读同目录下的：
+启动流程.txt
+
+
+一、目标环境和目录
+------------------
+操作系统：Ubuntu 22.04
+ROS 版本：ROS 2 Humble
+Gazebo：Gazebo Classic 11.10.2
+飞控：PX4 SITL（Iris 动力学模型）
+通信桥：MAVROS 2
+构建系统：colcon + ament_cmake
+
+Gestelt 工作空间：
+/home/cjc/ws_capstone/gestelt
+
+PX4 源码和编译目录：
+/home/cjc/ws_capstone/PX4-Autopilot
+
+本次验证使用的 PX4 提交：
+2110eae25d32ef102c5e44f2590fd7f9d65fc44d
+
+MAVLink/MAVROS 端点：
+udp://:14540@127.0.0.1:14580
+
+
+二、当前验证结果
+----------------
+已完成：
+1. 工作空间 28 个 ROS 2 包全部通过 colcon 编译。
+2. ROS 1 的 catkin、消息、TF、MAVROS 和 Python 接口已完成 ROS 2 迁移。
+3. fake simulation 可以完成 empty_map 任务。
+4. PX4 SITL、Gazebo Classic 和 MAVROS 已连通。
+5. PX4 可以从 AUTO.LOITER 切换到 OFFBOARD、自动解锁并真实起飞。
+6. empty_map 已实际飞完 (2, 2, 2) 和 (5, 5, 1) 两个航点。
+7. RViz2 可以显示 PCD 地图、传感器点云、里程计、TF 和规划结果。
+8. Gazebo 与 RViz2 可以同时运行。
+
+尚未验证：
+1. 真实无人机上的 PX4 硬件部署。
+2. 多架 PX4 SITL 的独立 MAVLink 端口和命名空间。
+3. 所有森林场景的 PX4 物理飞行效果。
+
+
+三、安装 ROS 2 Humble 和基础工具
+--------------------------------
+如果 /opt/ros/humble 尚不存在，先按 ROS 官方 Ubuntu 22.04 安装步骤
+配置软件源并安装 ROS 2 Humble。
+
+sudo apt update
+sudo apt install -y \
+  build-essential \
+  cmake \
+  git \
+  ninja-build \
+  python3-colcon-common-extensions \
+  python3-vcstool \
+  python3-yaml \
+  python3-pyqt5 \
+  tmux \
+  xmlstarlet
+
+
+四、安装 Gestelt 的 C++ 和 ROS 2 依赖
+--------------------------------------
+sudo apt install -y \
+  libeigen3-dev \
+  libyaml-cpp-dev \
+  liblbfgs-dev \
+  liblapack-dev \
+  libblas-dev \
+  libccd-dev
+
+sudo apt install -y \
+  ros-humble-desktop \
+  ros-humble-mavros \
+  ros-humble-mavros-msgs \
+  ros-humble-mavros-extras \
+  ros-humble-pcl-ros \
+  ros-humble-tf2-ros \
+  ros-humble-tf2-geometry-msgs \
+  ros-humble-nav-msgs \
+  ros-humble-message-filters \
+  ros-humble-rosbag2 \
+  ros-humble-rviz2
+
+安装 Gazebo Classic 和 ROS 2 Gazebo 接口：
+
+sudo apt install -y \
+  gazebo \
+  ros-humble-gazebo-ros-pkgs
+
+检查基础环境：
+
+source /opt/ros/humble/setup.bash
+gazebo --version
+ros2 pkg prefix mavros
+ros2 pkg prefix rviz2
+ros2 pkg prefix gazebo_ros
+
+
+五、准备 PX4 SITL 源码和依赖
+----------------------------
+如果 PX4 目录已经存在，跳过 git clone。
+
+cd /home/cjc/ws_capstone
+git clone https://github.com/PX4/PX4-Autopilot.git
+cd PX4-Autopilot
+
+切换到本次验证的提交：
+
+git checkout 2110eae25d32ef102c5e44f2590fd7f9d65fc44d
+git submodule update --init --recursive
+
+安装 PX4 的 Ubuntu 依赖。只运行 SITL 时不需要 NuttX 交叉编译工具链：
+
+cd /home/cjc/ws_capstone/PX4-Autopilot
+bash Tools/setup/ubuntu.sh --no-nuttx
+
+如果系统已经安装依赖，可以跳过这一步。
+
+安装 MAVROS 的 GeographicLib 地理数据集：
+
+sudo /opt/ros/humble/lib/mavros/install_geographiclib_datasets.sh
+
+本机应存在：
+/usr/share/GeographicLib/geoids/egm96-5.pgm
+
+
+六、首次编译 PX4 SITL 和 Gazebo Classic 插件
+--------------------------------------------
+cd /home/cjc/ws_capstone/PX4-Autopilot
+DONT_RUN=1 make px4_sitl gazebo-classic
+
+DONT_RUN=1 表示只编译，不立即启动。
+首次编译需要较长时间；以后再修改 PX4 时才需要重新编译。
+
+编译完成后应先单独启动一次 PX4 SITL：
+
+cd /home/cjc/ws_capstone/PX4-Autopilot
+export GAZEBO_IP=127.0.0.1
+export GAZEBO_MASTER_URI=http://127.0.0.1:11345
+make px4_sitl gazebo-classic
+
+该命令会同时启动：
+1. PX4 SITL。
+2. Gazebo Classic gzserver。
+3. Gazebo Classic gzclient。
+4. 具有真实动力学的 Iris 四旋翼。
+
+必须优先把 Gazebo 绑定到本机回环地址。NUS VPN 或无线网卡可能使 Gazebo
+通告 192.168.x.x，导致 GUI 的 scene 服务超时并出现黑屏。启动日志里的
+“Publicized address”应为 127.0.0.1。
+
+不要在这个流程中另外运行 Gestelt 的 gazebo_world.launch.py，
+否则会出现第二个 Gazebo master，导致 gzserver 端口冲突或异常退出。
+
+
+七、安装和编译 Gestelt
+----------------------
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+
+首次使用时更新 rosdep。若提示已经初始化，可以跳过 sudo rosdep init：
+
+sudo rosdep init
+rosdep update
+
+安装 package.xml 中声明的依赖：
+
+rosdep install --from-paths . --ignore-src -r -y
+
+完整编译：
+
+colcon build --symlink-install
+
+编译完成后加载工作空间：
+
+source install/setup.bash
+
+检查自定义包：
+
+ros2 pkg prefix gestelt_bringup
+ros2 pkg prefix gestelt_py_compat
+ros2 pkg prefix gestelt_compat
+
+正常输出分别位于：
+/home/cjc/ws_capstone/gestelt/install/
+
+检查包数量：
+
+colcon list
+
+当前应为 28 个 ROS 2 包。
+
+
+八、修改后如何增量编译
+----------------------
+只修改 gestelt_bringup 的 launch、config、world 或场景资源时：
+
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-select gestelt_bringup
+source install/setup.bash
+
+修改以下公共内容时，必须完整编译：
+1. gestelt_compat 或 gestelt_py_compat。
+2. gestelt_msgs、gestelt_debug_msgs 或其他 .msg 文件。
+3. trajectory_server 公共头文件。
+4. navigator、grid_map 等被多个包依赖的接口。
+
+完整编译命令：
+
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --continue-on-error
+source install/setup.bash
+
+
+九、每个新终端的环境加载顺序
+----------------------------
+操作 Gestelt 的新终端都要执行：
+
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+顺序不能反过来。必须先加载 ROS 2 Humble，再加载 Gestelt。
+
+如果出现：
+Package 'gestelt_bringup' not found
+
+说明当前终端没有加载 install/setup.bash。
+
+如果直接运行场景脚本时出现：
+ModuleNotFoundError: No module named 'gestelt_py_compat'
+
+同样说明当前终端没有加载 install/setup.bash。
+
+
+十、VS Code Snap 和 RViz2 的 GTK 冲突
+--------------------------------------
+从 VS Code Snap 内置终端启动 RViz2 时，可能出现：
+libpthread.so.0
+undefined symbol: __libc_pthread_init
+GLIBC_PRIVATE
+
+使用 scenario_ros2.launch.py 的 use_rviz:=true 时，launch 会自动清理冲突变量。
+
+手动启动 RViz2 时使用：
+
+env -u GTK_PATH -u GTK_EXE_PREFIX -u GTK_IM_MODULE_FILE \
+  -u GSETTINGS_SCHEMA_DIR -u GIO_MODULE_DIR -u SNAP_LIBRARY_PATH \
+  rviz2 -d install/gestelt_bringup/share/gestelt_bringup/launch/rviz/gestelt_ros2.rviz
+
+
+十一、ROS 1 专用目录
+-------------------
+旧 XML launch 和 shell 脚本仍保留，仅作为 ROS 1 参考，不能直接用于 Humble。
+
+以下 ROS 1 专用包通过 COLCON_IGNORE 排除：
+decomp_ros_utils
+decomp_test_node
+catkin_simple
+
+ROS 2 主要启动入口：
+gestelt_bringup/launch/scenario_ros2.launch.py
+
+仅显示用 Gazebo 入口：
+gestelt_bringup/launch/gazebo_world.launch.py
+
+注意：PX4 SITL 物理仿真由 PX4 自己启动 Gazebo，不使用 gazebo_world.launch.py。
+
+
+十二、环境完成检查
+------------------
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 pkg prefix gestelt_bringup
+ros2 pkg prefix mavros
+ros2 pkg prefix rviz2
+gazebo --version
+test -x /home/cjc/ws_capstone/PX4-Autopilot/build/px4_sitl_default/bin/px4 && echo "PX4 build OK"
+
+全部成功后，继续阅读“启动流程.txt”。

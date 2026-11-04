@@ -1,32 +1,26 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.8)
 project(ikd_tree)
 
-set(CMAKE_BUILD_TYPE "Release")
-add_compile_options(-std=c++17)
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
-
-
-find_package(PCL REQUIRED COMPONENTS common io)
-find_package(catkin REQUIRED)
+find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(PCL REQUIRED COMPONENTS common io)
 
-catkin_package(
- INCLUDE_DIRS include
- LIBRARIES ${PROJECT_NAME}
+add_library(${PROJECT_NAME} SHARED src/ikd_tree.cpp)
+target_include_directories(${PROJECT_NAME} PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
 )
+target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
+target_link_libraries(${PROJECT_NAME} PUBLIC Eigen3::Eigen ${PCL_LIBRARIES})
 
-include_directories( 
-    include 
-    ${PCL_INCLUDE_DIRS}
+install(DIRECTORY include/ DESTINATION include)
+install(
+  TARGETS ${PROJECT_NAME}
+  EXPORT ${PROJECT_NAME}Targets
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin
 )
-add_definitions(${PCL_DEFINITIONS})
-link_directories(${PCL_LIBRARY_DIRS})
-
-add_library(${PROJECT_NAME} 
-    include/ikd_tree/ikd_tree.h
-    src/ikd_tree.cpp
-)
-
-target_link_libraries(${PROJECT_NAME}
-    ${PCL_LIBRARIES}
-)  
+ament_export_targets(${PROJECT_NAME}Targets HAS_LIBRARY_TARGET)
+ament_export_dependencies(Eigen3 PCL)
+ament_package()

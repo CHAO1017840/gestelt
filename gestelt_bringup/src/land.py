@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import rospy
+import gestelt_py_compat.rospy_compat as rospy
 from std_msgs.msg import Int8
 
 traj_server_cmd_pub = rospy.Publisher(f'/traj_server/swarm_command', Int8, queue_size=5)

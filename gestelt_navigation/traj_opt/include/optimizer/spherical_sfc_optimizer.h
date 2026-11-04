@@ -2,7 +2,7 @@
 #define _SPHERICAL_SFC_OPTIMIZER_H_
 
 #include <Eigen/Eigen>
-#include <ros/ros.h>
+#include <gestelt_ros2_compat/ros.hpp>
 #include <grid_map/grid_map.h>
 #include <path_searching/dyn_a_star.h>
 #include <traj_utils/plan_container.hpp>

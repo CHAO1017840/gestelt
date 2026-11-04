@@ -9,16 +9,16 @@
 
 #include <decomp_geometry/polyhedron.h>
 #include <convex_decomp.hpp>              // Toumieh's polyhedron SFC generation method
-#include <decomp_ros_msgs/EllipsoidArray.h>
-#include <decomp_ros_msgs/PolyhedronArray.h>
+#include <decomp_ros_msgs/msg/ellipsoid_array.hpp>
+#include <decomp_ros_msgs/msg/polyhedron_array.hpp>
 #include <decomp_util/ellipsoid_decomp.h> // Liu's polyhedron SFC generation method
 
 #include <queue>
 #include <unordered_map>
 
-#include <ros/ros.h>
-#include <visualization_msgs/Marker.h>
-#include <visualization_msgs/MarkerArray.h>
+#include <gestelt_ros2_compat/ros.hpp>
+#include <visualization_msgs/msg/marker.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 #include "geo_utils.hpp"
 
@@ -213,9 +213,9 @@ private: // Helper methods
       for (int x = 0; x < 3; x++) {
         for (int y = 0; y < 3; y++) {
           if(x < Dim && y < Dim)
-            ellipsoid.E[3 * x + y] = C(x, y);
+            ellipsoid.e[3 * x + y] = C(x, y);
           else
-            ellipsoid.E[3 * x + y] = 0;
+            ellipsoid.e[3 * x + y] = 0;
         }
       }
       ellipsoids.ellipsoids.push_back(ellipsoid);

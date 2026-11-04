@@ -1,10 +1,12 @@
 #ifndef _EGO_PLANNER_ADAPTOR_H_
 #define _EGO_PLANNER_ADAPTOR_H_
 
+#include <boost/shared_ptr.hpp>
+
 #include <planner_adaptor/planner_adaptor.h>
 
 #include <optimizer/poly_traj_utils.hpp>
-#include <traj_utils/PolyTraj.h>
+#include <traj_utils/msg/poly_traj.hpp>
 class EgoPlannerAdaptor : public PlannerAdaptor
 {
 public:
@@ -47,7 +49,7 @@ public:
    * @brief (PLANNER-SPECIFIC IMPLEMENTATION) Callback for planning trajectory
    * 
    */
-  void planTrajectoryCB(traj_utils::PolyTrajPtr msg){
+  void planTrajectoryCB(std::shared_ptr<const traj_utils::msg::PolyTraj> msg){
     if (msg->order != 5)
     {
       // Only support trajectory order equals 5 now!
@@ -81,7 +83,7 @@ public:
 
     be_traj_mutex_.lock();
     be_traj_.reset(new poly_traj::Trajectory(dura, cMats));
-    be_traj_->setGlobalStartTime(msg->start_time.toSec());
+    be_traj_->setGlobalStartTime(ros::Time(msg->start_time).toSec());
     be_traj_mutex_.unlock();
   }
 

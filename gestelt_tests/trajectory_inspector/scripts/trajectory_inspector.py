@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import rospy
+import gestelt_py_compat.rospy_compat as rospy
 
 import numpy as np
 import matplotlib.pyplot as plt

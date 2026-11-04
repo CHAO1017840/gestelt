@@ -1,0 +1,198 @@
+Gestelt / PX4 GPS 中断测试
+==========================
+更新时间：2026-10-24
+适用环境：PX4 SITL + Gazebo Classic + PX4 EKF2
+
+注意：本文测试的是 GPS 中断、VIO 仍然正常的情况。
+如果实验目标是模拟 VIO 失效，请使用 failure vio off，
+具体流程见同目录下的 VIO失效测试.txt。
+
+
+一、结论
+--------
+GPS 中断后仅仅延长 EKF2_NOAID_TOUT 不能保持位置控制。
+IMU 只能推算加速度，无法长期约束速度和水平位置；延长超时只会延迟
+position/velocity invalid，同时增加位置漂移风险。
+
+要让 GPS 中断后继续使用位置控制，EKF2 必须在 GPS 消失前已经融合另一套
+持续有效的外部观测。SITL 中最方便的方法是启用 Gazebo external vision
+（vehicle_visual_odometry）。
+
+本机已使用 PX4 自带 iris_vision 模型验证：
+1. GPS 中断后 cs_gps=False。
+2. cs_ev_pos=True、cs_ev_vel=True、cs_ev_hgt=True。
+3. xy_valid=True、v_xy_valid=True。
+4. PX4 保持 OFFBOARD + armed，没有降级为姿态模式或 blind land。
+
+
+二、PX4 airframe 修正
+---------------------
+本 PX4 提交中的 1013_gazebo-classic_iris_vision 原本引用了不存在的：
+10016_gazebo-classic_iris
+
+已改为实际存在的：
+10016_none_iris
+
+修改文件：
+/home/cjc/ws_capstone/PX4-Autopilot/ROMFS/px4fmu_common/
+init.d-posix/airframes/1013_gazebo-classic_iris_vision
+
+
+三、启动带外部视觉的 SITL
+-------------------------
+必须使用 iris_vision，不能使用普通 iris：
+
+cd /home/cjc/ws_capstone/PX4-Autopilot
+export GAZEBO_IP=127.0.0.1
+export GAZEBO_MASTER_URI=http://127.0.0.1:11345
+make px4_sitl gazebo-classic_iris_vision
+
+等 PX4 出现：
+Ready for takeoff!
+
+iris_vision 默认 EKF2 参数：
+EKF2_EV_CTRL=15      融合外部视觉的位置、高度、速度、偏航
+EKF2_HGT_REF=3       高度参考使用 Vision
+EKF2_GPS_CTRL=0      默认按无 GPS 运行
+EKF2_EV_DELAY=5      外部视觉延迟补偿
+
+在 pxh> 中检查：
+
+param show EKF2_EV_CTRL
+param show EKF2_HGT_REF
+param show EKF2_GPS_CTRL
+param show EKF2_EV_DELAY
+
+
+四、先让 GPS 和外部视觉同时工作
+-------------------------------
+iris_vision 默认关闭 GPS。为了测试飞行中“断开 GPS”，需要在 pxh> 中临时
+启用 GPS：
+
+param set EKF2_GPS_CTRL 7
+
+然后检查：
+
+listener estimator_status_flags
+
+应同时看到：
+cs_gps: True
+cs_ev_pos: True
+cs_ev_vel: True
+cs_ev_hgt: True
+cs_inertial_dead_reckoning: False
+
+如果 cs_ev_pos 或 cs_ev_vel 为 False，不要继续测试 GPS 中断。说明外部
+视觉没有进入 EKF2，此时断 GPS 会再次触发位置控制失效。
+
+
+五、启动 Gestelt 和飞行任务
+---------------------------
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 launch gestelt_bringup scenario_ros2.launch.py \
+  scenario:=empty_map \
+  run_mission:=true \
+  use_rviz:=false \
+  use_gazebo:=false \
+  use_fake_drone:=false \
+  use_mavros:=true \
+  mavros_fcu_url:=udp://:14540@127.0.0.1:14580
+
+等飞机进入 OFFBOARD、离地并开始执行任务。
+
+
+六、飞行中断开 GPS
+------------------
+在 PX4 的 pxh> 终端执行：
+
+param set SYS_FAILURE_EN 1
+failure gps off
+
+应看到：
+CMD_INJECT_FAILURE, GPS off
+
+检查：
+
+listener estimator_status_flags
+listener vehicle_local_position
+
+应看到：
+cs_gps: False
+cs_ev_pos: True
+cs_ev_vel: True
+cs_ev_hgt: True
+cs_inertial_dead_reckoning: False
+xy_valid: True
+v_xy_valid: True
+dead_reckoning: False
+
+此时 PX4 应继续处于 OFFBOARD + armed。可以用以下命令检查 ROS 2 状态：
+
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 topic echo --once /drone0/mavros/state
+ros2 topic echo --once /drone0/mavros/local_position/odom \
+  --field pose.pose.position
+
+
+七、恢复 GPS
+------------
+在 pxh> 中执行：
+
+failure gps ok
+
+应看到：
+CMD_INJECT_FAILURE, GPS ok
+
+GPS 重新通过 EKF2 检查后，estimator_status_flags 中的 cs_gps 会恢复为 True。
+
+
+八、降落
+--------
+测试结束后通过 MAVROS 切换到自动降落：
+
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 service call /drone0/mavros/set_mode \
+  mavros_msgs/srv/SetMode \
+  "{base_mode: 0, custom_mode: 'AUTO.LAND'}"
+
+等 MAVROS state 中 armed=false 后，再停止 Gestelt 和 PX4。
+
+
+九、参数含义
+------------
+EKF2_EV_CTRL=15
+  第0位：水平位置
+  第1位：高度
+  第2位：3D速度
+  第3位：偏航
+  15 表示四项全部融合。
+
+EKF2_GPS_CTRL=7
+  融合 GPS 水平位置、高度和3D速度。
+
+EKF2_HGT_REF=3
+  高度参考使用外部视觉。
+
+EKF2_NOAID_TOUT
+  表示多久没有速度约束后报告水平导航无效，默认 5 秒，最大 10 秒。
+  这个参数只能调整判定时间，不能产生新的速度观测。
+
+
+十、真实飞行注意事项
+--------------------
+本流程只适用于 SITL。真实无人机要保持 GPS 中断后的位置控制，需要真实的
+外部视觉、光流加测距、动作捕捉或其他速度/位置观测源，并完成以下工作：
+
+1. 时间同步。
+2. 坐标系和安装外参标定。
+3. 协方差和质量字段设置。
+4. 地面和低空逐步测试。
+5. GPS 丢失后的失效保护和降落预案。
+
+不要通过关闭 EKF 有效性检查或大幅延长 NOAID 超时来伪装可用导航。

@@ -1,4 +1,5 @@
 #include "grid_map/grid_map.h"
+#include <tf2/time.h>
 
 /** Initialization methods */
 
@@ -66,37 +67,41 @@ void GridMap::initMapROS(ros::NodeHandle &nh, ros::NodeHandle &pnh)
 
 void GridMap::initROSPubSubTimers(ros::NodeHandle &nh, ros::NodeHandle &pnh)
 {
+  tfBuffer_ = std::make_shared<tf2_ros::Buffer>(
+    nh.node_ptr()->get_clock(), tf2::durationFromSec(10.0), nh.node_ptr());
+
   /* Initialize ROS Subscribers, publishers */
   cloud_sub_.reset(new message_filters::Subscriber<sensor_msgs::PointCloud2>(
-    nh, "grid_map/cloud", 5, ros::TransportHints().tcpNoDelay()));
+    nh.node_ptr(), "grid_map/cloud", rmw_qos_profile_sensor_data));
 
   // From pose type, determine what type of localization message to subscribe to
   if (mp_.pose_type_ == PoseType::POSE_STAMPED) // Pose
   {
     ROS_INFO("[%s] Pose as camera pose input", node_name_.c_str());
     pose_sub_.reset(new message_filters::Subscriber<geometry_msgs::PoseStamped>(
-      nh, "grid_map/pose", 5, ros::TransportHints().udp()));
+      nh.node_ptr(), "grid_map/pose", rmw_qos_profile_sensor_data));
     sync_cloud_pose_.reset(new message_filters::Synchronizer<SyncPolicyCloudPose>(
         SyncPolicyCloudPose(5), *cloud_sub_, *pose_sub_));
-    sync_cloud_pose_->registerCallback(boost::bind(&GridMap::cloudPoseCB, this, _1, _2));
+    sync_cloud_pose_->registerCallback(&GridMap::cloudPoseCB, this);
   }
   else if (mp_.pose_type_ == PoseType::ODOMETRY) // Odom
   {
     ROS_INFO("[%s] Odometry as camera pose input", node_name_.c_str());
     odom_sub_.reset(new message_filters::Subscriber<nav_msgs::Odometry>(
-      nh, "grid_map/odom", 5, ros::TransportHints().udp()));
+      nh.node_ptr(), "grid_map/odom", rmw_qos_profile_sensor_data));
 
     sync_cloud_odom_.reset(new message_filters::Synchronizer<SyncPolicyCloudOdom>(
         SyncPolicyCloudOdom(5), *cloud_sub_, *odom_sub_));
-    sync_cloud_odom_->registerCallback(boost::bind(&GridMap::cloudOdomCB, this, _1, _2));
+    sync_cloud_odom_->registerCallback(&GridMap::cloudOdomCB, this);
   }
   else if (mp_.pose_type_ == PoseType::TF) // TF
   {
     ROS_INFO("[%s] TF as camera pose input", node_name_.c_str());
-    tfListener_.reset(new tf2_ros::TransformListener(tfBuffer_));
-    tf_cloud_filter_.reset(new tf2_ros::MessageFilter<sensor_msgs::PointCloud2>(*cloud_sub_, tfBuffer_, mp_.uav_origin_frame_, 5, 0));
+    tfListener_.reset(new tf2_ros::TransformListener(*tfBuffer_, nh.node_ptr()));
+    tf_cloud_filter_.reset(new tf2_ros::MessageFilter<sensor_msgs::PointCloud2>(
+      *cloud_sub_, *tfBuffer_, mp_.uav_origin_frame_, 5, nh.node_ptr()));
 
-    tf_cloud_filter_->registerCallback( boost::bind(&GridMap::cloudTFCB, this, _1) );
+    tf_cloud_filter_->registerCallback(&GridMap::cloudTFCB, this);
   }
   else { // UNKNOWN
     ROS_ERROR("[%s] Unknown POSE_TYPE", node_name_.c_str());
@@ -131,6 +136,7 @@ void GridMap::readROSParams(ros::NodeHandle &nh, ros::NodeHandle &pnh)
   pnh.param("grid_map/occ_map/inflation", mp_.inflation_, -1.0);
   pnh.param("grid_map/occ_map/max_range", mp_.max_range, -1.0);
   pnh.param("grid_map/occ_map/ground_height", mp_.ground_height_, 0.0);
+  pnh.param("grid_map/sensor_timeout", mp_.sensor_timeout_, 1.0);
 
   mp_.inf_num_voxels_ = std::ceil(mp_.inflation_/mp_.resolution_);
 
@@ -272,7 +278,8 @@ void GridMap::cloudTFCB( const sensor_msgs::PointCloud2ConstPtr &msg_pc)
   try
   {
     // Get camera to origin frame transform
-    cam_to_origin_tf = tfBuffer_.lookupTransform(mp_.uav_origin_frame_, mp_.cam_frame_, ros::Time(0));
+    cam_to_origin_tf = tfBuffer_->lookupTransform(
+      mp_.uav_origin_frame_, mp_.cam_frame_, rclcpp::Time(0, 0, RCL_ROS_TIME));
   }
   catch (const tf2::TransformException &ex)
   {
@@ -479,8 +486,9 @@ bool GridMap::isPoseValid() {
     return false;
   }
 
-  if (isTimeout(md_.last_sensor_msg_time, 0.25)){
-    ROS_ERROR_THROTTLE(1.0, "[%s] Sensor message timeout exceeded 0.25s: (%f, %f)", node_name_.c_str(), md_.last_sensor_msg_time, ros::Time::now().toSec());
+  if (isTimeout(md_.last_sensor_msg_time, mp_.sensor_timeout_)){
+    ROS_ERROR_THROTTLE(1.0, "[%s] Sensor message timeout exceeded %.2fs: (%f, %f)",
+      node_name_.c_str(), mp_.sensor_timeout_, md_.last_sensor_msg_time, ros::Time::now().toSec());
     return false;
   }
 

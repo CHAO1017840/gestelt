@@ -1,28 +1,19 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.8)
 project(gestelt_bringup)
 
-## Compile as C++11, supported in ROS Kinetic and newer
-add_compile_options(-std=c++17)
+find_package(ament_cmake REQUIRED)
 
-set(ROS_LIBRARIES
-  roscpp
+file(GLOB GESTELT_PYTHON_SCRIPTS CONFIGURE_DEPENDS src/*.py)
+file(GLOB GESTELT_SCENARIO_SCRIPTS CONFIGURE_DEPENDS src/scenarios/*.py)
+
+install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY simulation DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY flight_params DESTINATION share/${PROJECT_NAME})
+install(PROGRAMS scripts/base_station.sh scripts/debug_plan.sh scripts/offboard.sh
+  scripts/scenario.sh scripts/scenario_hitl_base.sh scripts/scenario_hitl_drone.sh
+  scripts/scenario_sitl_drone.sh scripts/sitl_single_drone.sh
+  DESTINATION lib/${PROJECT_NAME}
 )
-
-## Find catkin macros and libraries
-## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
-## is used, also find other catkin packages
-find_package(catkin REQUIRED COMPONENTS
-  ${ROS_LIBRARIES}
-)
-
-catkin_package(
-#  INCLUDE_DIRS 
-  # include
-#  LIBRARIES gestelt_bringup
-#  CATKIN_DEPENDS  
-#  DEPENDS 
-)
-
-###########
-## Build ##
-###########
+install(PROGRAMS ${GESTELT_PYTHON_SCRIPTS} DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS ${GESTELT_SCENARIO_SCRIPTS} DESTINATION share/${PROJECT_NAME}/scenarios)
+ament_package()

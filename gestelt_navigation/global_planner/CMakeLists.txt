@@ -1,58 +1,34 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.8)
 project(global_planner)
 
-set(CMAKE_BUILD_TYPE "Release")
-add_compile_options(-std=c++17)
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
-
-
-set(ROS_LIBRARIES
-  roscpp
-  std_msgs
-  geometry_msgs
-  visualization_msgs
-  grid_map
-  jps3d
-  logger
-)
-
-## Find catkin macros and libraries
-## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
-## is used, also find other catkin packages
-find_package(catkin REQUIRED COMPONENTS
-  ${ROS_LIBRARIES}
-)
+find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(gestelt_compat REQUIRED)
+find_package(grid_map REQUIRED)
+find_package(jps3d REQUIRED)
+find_package(logger REQUIRED)
 
-###################################
-## catkin specific configuration ##
-###################################
-catkin_package(
- INCLUDE_DIRS include
- LIBRARIES global_planner # Exported libraries
- CATKIN_DEPENDS grid_map jps3d logger # Export grid_map as part of this package
-#  DEPENDS system_lib
+add_library(${PROJECT_NAME} SHARED src/a_star.cpp src/jps_wrapper.cpp)
+target_include_directories(${PROJECT_NAME} PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
+target_link_libraries(${PROJECT_NAME} PUBLIC
+  gestelt_compat::gestelt_compat
+  grid_map::grid_map
+  jps3d::jps3d
+  logger::logger
+  Eigen3::Eigen
 )
 
-###########
-## Build ##
-###########
-
-## Specify additional locations of header files
-## Your package locations should be listed before other locations
-include_directories(
-  include
-  ${catkin_INCLUDE_DIRS}
-  ${EIGEN3_INCLUDE_DIRS} 
+install(DIRECTORY include/ DESTINATION include)
+install(TARGETS ${PROJECT_NAME}
+  EXPORT ${PROJECT_NAME}Targets
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin
 )
-
-## Declare a C++ library
-add_library(global_planner 
-  src/a_star.cpp
-  src/jps_wrapper.cpp
-)
-
-## Specify libraries to link a library or executable target against
-target_link_libraries(global_planner
-  ${catkin_LIBRARIES}
-)
+ament_export_targets(${PROJECT_NAME}Targets HAS_LIBRARY_TARGET NAMESPACE ${PROJECT_NAME}::)
+ament_export_dependencies(Eigen3 gestelt_compat grid_map jps3d logger)
+ament_package()

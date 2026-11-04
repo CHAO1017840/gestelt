@@ -116,7 +116,7 @@ void FakeLaser::set_parameters(
 
     idx_map = Eigen::MatrixXi::Constant(_hrz_laser_line_num, _vtc_laser_line_num, -1);
     dis_map = Eigen::MatrixXd::Constant(_hrz_laser_line_num, _vtc_laser_line_num, 9999.0);
-    pcl::copyPointCloud(global_map, _global_map);
+    _global_map = global_map;
     kdtree_local_map.setInputCloud(_global_map.makeShared());
 }
 
