@@ -125,6 +125,17 @@ ros2 service call /drone0/ai_imu_velocity/enable_nav \
   std_srvs/srv/SetBool "{data: true}"
 ```
 
+For one manual failover action, run this while hovering in OFFBOARD/VIO mode:
+
+```bash
+ros2 run gestelt_bringup ai_failover.py
+```
+
+The helper refuses to run while disarmed, captures the latest healthy PX4
+position/velocity/attitude, enables AI navigation, and immediately injects VIO
+off. This prevents AI velocity from integrating for many seconds before VIO is
+actually removed.
+
 On enable, the estimator is seeded from the current PX4 local position,
 velocity, and attitude, so standby drift is not injected into EKF2. The resulting
 position is then propagated from AI velocity. A VIO-off test remained in
