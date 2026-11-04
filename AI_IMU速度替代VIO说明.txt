@@ -369,8 +369,30 @@ Odometry 中：
     install/gestelt_bringup/share/gestelt_bringup/scenarios/empty_map.py
 
   执行命令：
+    cd /home/cjc/ws_capstone/gestelt
+    source /opt/ros/humble/setup.bash
+    source install/setup.bash
+
+    先确认包能被找到：
+    ros2 pkg prefix gestelt_bringup
+
+    预期输出：
+    /home/cjc/ws_capstone/gestelt/install/gestelt_bringup
+
+    然后执行飞行脚本：
     python3 \
       "$(ros2 pkg prefix gestelt_bringup)/share/gestelt_bringup/scenarios/empty_map.py"
+
+  不要在未 source 工作区的终端中从 ~ 目录直接执行该命令。
+  否则 ros2 pkg prefix 会返回 Package not found，
+  路径会错误地变成 /share/gestelt_bringup/scenarios/empty_map.py。
+
+  也可以直接使用完整安装路径：
+    python3 \
+      /home/cjc/ws_capstone/gestelt/install/gestelt_bringup/share/gestelt_bringup/scenarios/empty_map.py
+
+  直接路径方式仍然必须事先 source install/setup.bash，
+  因为飞行脚本还需要导入 gestelt_msgs 和 gestelt_py_compat。
 
   empty_map.py 会执行：
     1. 将轨迹服务器切换到 HOVER
