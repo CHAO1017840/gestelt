@@ -40,19 +40,21 @@ param set-default EKF2_HGT_REF 3
 param set-default EKF2_GPS_CTRL 0
 param set-default ATT_EXT_HDG_M 1
 
-# Raynor is significantly lighter than Iris.
-param set-default MC_ROLLRATE_P 0.055175
-param set-default MC_ROLLRATE_I 0.2
-param set-default MC_ROLLRATE_D 0.0005
-param set-default MC_PITCHRATE_P 0.06
-param set-default MC_PITCHRATE_I 0.2
-param set-default MC_PITCHRATE_D 0.0005
+# SITL-specific rate gains. The real-aircraft gains make this low-inertia
+# Gazebo model oscillate around 8 Hz because its motors respond much faster
+# than the physical vehicle. These gains were verified with hover and waypoints.
+param set-default MC_ROLLRATE_P 0.02
+param set-default MC_ROLLRATE_I 0.02
+param set-default MC_ROLLRATE_D 0.0
+param set-default MC_PITCHRATE_P 0.02
+param set-default MC_PITCHRATE_I 0.02
+param set-default MC_PITCHRATE_D 0.0
 param set-default MC_YAWRATE_P 0.2
 param set-default MC_YAWRATE_I 0.1
 param set-default MC_YAWRATE_D 0.0
 
-param set-default MC_ROLL_P 11.499
-param set-default MC_PITCH_P 6.5
+param set-default MC_ROLL_P 6.0
+param set-default MC_PITCH_P 5.0
 param set-default MC_YAW_P 2.8
 
 param set-default MPC_THR_HOVER 0.3

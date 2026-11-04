@@ -657,6 +657,31 @@ use_ai_imu_velocity:=true 已经会自动启动该节点。
    正常起飞只应出现几度的小幅修正；为了飞向航点可以倾斜，
    但不应连续滚转到 180 度。
 
+7. Raynor 起飞后高频抖动
+
+   ULog 中的典型现象：
+     vehicle_angular_velocity_groundtruth 的 pitch 约 6-9 rad/s
+     actuator_motors 在 0 与 0.8-1.0 之间频繁饱和
+     主频约 8 Hz
+
+   这不是 VIO 噪声，也不是风。原因是 Gazebo 模型惯量较小、
+   电机响应比真实飞机快，直接把真实飞机的 Raynor PID
+   用于 SITL 会造成速率环极限振荡。
+
+   SITL 使用以下保守参数：
+     MC_ROLLRATE_P  0.02
+     MC_ROLLRATE_I  0.02
+     MC_ROLLRATE_D  0
+     MC_PITCHRATE_P 0.02
+     MC_PITCHRATE_I 0.02
+     MC_PITCHRATE_D 0
+     MC_ROLL_P      6.0
+     MC_PITCH_P     5.0
+
+   上述参数已经完成起飞、悬停和
+   (2,2,2) -> (5,5,1) 航点测试。
+   实机参数与 SITL 参数必须分开，不能把 SITL 调参结果直接写回实机。
+
 
 十三、关键文件
 --------------
