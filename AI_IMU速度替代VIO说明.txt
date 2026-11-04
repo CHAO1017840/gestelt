@@ -360,10 +360,40 @@ Odometry 中：
 
   Stationary calibration complete: gyro_bias=[...]
 
-第四步：用 VIO 起飞并悬停。
+第四步：运行飞行脚本。
 
-  python3 \
-    "$(ros2 pkg prefix gestelt_bringup)/share/gestelt_bringup/scenarios/empty_map.py"
+  飞行脚本文件：
+    gestelt_bringup/src/scenarios/empty_map.py
+
+  安装后的路径：
+    install/gestelt_bringup/share/gestelt_bringup/scenarios/empty_map.py
+
+  执行命令：
+    python3 \
+      "$(ros2 pkg prefix gestelt_bringup)/share/gestelt_bringup/scenarios/empty_map.py"
+
+  empty_map.py 会执行：
+    1. 将轨迹服务器切换到 HOVER
+    2. 将轨迹服务器切换到 MISSION
+    3. 发送航点 (2, 2, 2)
+    4. 发送航点 (5, 5, 1)
+
+  这不是单纯悬停脚本。对于第一次影子速度对比，
+  应先保持位置悬停完成 30 至 60 秒的速度比较，
+  再运行 empty_map.py 执行航点。
+
+  如果只需要执行固定测试流程，也可以在 scenario 启动时使用：
+    run_mission:=true
+
+  但不建议在 AI_IMU 测试中使用自动任务，因为现有 launch 固定
+  3 秒后执行飞行脚本，可能早于以下步骤完成：
+    - MAVROS 连接
+    - AI_IMU 200 帧预热
+    - AI 速度 200 帧静止校准
+    - PX4 预飞检查
+
+  因此 AI_IMU 测试应保持 run_mission:=false，
+  检查全部通过后再手动执行飞行脚本。
 
 第五步：比较 AI 影子速度和 PX4/VIO 速度。
 
@@ -451,6 +481,32 @@ VIO 和 AI 同时写同一话题会造成来源竞争。
    - PX4 pxh> failure vio off
    - 或关闭 GPS
    - 不应先失效再临时启动 AI 节点
+
+   手动 VIO 失效方式 A，在 PX4 pxh> 输入：
+     param set SYS_FAILURE_EN 1
+     failure vio off
+
+   手动恢复 VIO：
+     failure vio ok
+
+   手动 VIO 失效方式 B，在 ROS 2 终端发送：
+     ros2 service call /drone0/mavros/cmd/command \
+       mavros_msgs/srv/CommandLong \
+       "{broadcast: false, command: 420, confirmation: 0, \
+       param1: 6.0, param2: 1.0, \
+       param3: 0.0, param4: 0.0, param5: 0.0, \
+       param6: 0.0, param7: 0.0}"
+
+   手动恢复时只把 param2 改为 0.0：
+     "{broadcast: false, command: 420, confirmation: 0, \
+     param1: 6.0, param2: 0.0, \
+     param3: 0.0, param4: 0.0, param5: 0.0, \
+     param6: 0.0, param7: 0.0}"
+
+   command=420 为 MAV_CMD_INJECT_FAILURE
+   param1=6 为 VIO
+   param2=1 为失效
+   param2=0 为恢复
 
 7. 接管观察
    - listener estimator_status_flags
@@ -570,6 +626,9 @@ ROS 2 launch：
 
 场景集成：
   gestelt_bringup/launch/scenario_ros2.launch.py
+
+飞行任务脚本：
+  gestelt_bringup/src/scenarios/empty_map.py
 
 
 十四、安全限制
