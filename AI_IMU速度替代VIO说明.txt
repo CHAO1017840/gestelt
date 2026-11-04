@@ -68,6 +68,15 @@ PX4 再将其作为外部速度观测送入 EKF2。
 
   source install/setup.bash
 
+安装 Raynor SITL 模型和 airframe：
+
+  ./gestelt_bringup/scripts/install_raynor_sitl.sh \
+    /home/cjc/ws_capstone/PX4-Autopilot
+
+  第一次安装后重新生成 SITL 目标：
+  cd /home/cjc/ws_capstone/PX4-Autopilot
+  DONT_RUN=1 make px4_sitl gazebo-classic_raynor
+
 检查 ONNX Runtime：
 
   python3 -c \
@@ -82,10 +91,10 @@ PX4 再将其作为外部速度观测送入 EKF2。
 
 四、PX4 设置
 ------------
-本方案不使用 iris_vision 的 VIO 输出。建议先使用普通 iris SITL：
+本方案使用与 AI 模型数据域匹配的 Raynor SITL：
 
   cd /home/cjc/ws_capstone/PX4-Autopilot
-  make px4_sitl gazebo-classic_iris
+  make px4_sitl gazebo-classic_raynor
 
 等待：
 
@@ -325,19 +334,21 @@ Odometry 中：
 第一步：PX4 使用 VIO 正常运行。
 
   cd /home/cjc/ws_capstone/PX4-Autopilot
-  make px4_sitl gazebo-classic_iris_vision
+  make px4_sitl gazebo-classic_raynor
 
 第二步：设置 PX4 同时使用 VIO 位置和 AI 速度。
 
   在 PX4 pxh> 执行：
-    param set EKF2_EV_CTRL 7
+    param set EKF2_EV_CTRL 15
     param set EKF2_GPS_CTRL 0
+    param set EKF2_HGT_REF 3
     param save
 
-  EKF2_EV_CTRL=7 表示外部视觉同时使用：
+  EKF2_EV_CTRL=15 表示外部视觉同时使用：
     - 水平位置
     - 高度
     - 3D 速度
+    - yaw
 
   VIO 提供位置和高度，AI_IMU 提供速度。
 
@@ -629,6 +640,15 @@ ROS 2 launch：
 
 飞行任务脚本：
   gestelt_bringup/src/scenarios/empty_map.py
+
+Raynor 模型：
+  gestelt_bringup/simulation/models/raynor/raynor.sdf
+
+Raynor PX4 airframe：
+  gestelt_bringup/simulation/px4_airframes/1020_gazebo-classic_raynor
+
+Raynor 安装脚本：
+  gestelt_bringup/scripts/install_raynor_sitl.sh
 
 
 十四、安全限制

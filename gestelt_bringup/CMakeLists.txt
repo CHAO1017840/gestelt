@@ -12,6 +12,7 @@ install(DIRECTORY flight_params DESTINATION share/${PROJECT_NAME})
 install(PROGRAMS scripts/base_station.sh scripts/debug_plan.sh scripts/offboard.sh
   scripts/scenario.sh scripts/scenario_hitl_base.sh scripts/scenario_hitl_drone.sh
   scripts/scenario_sitl_drone.sh scripts/sitl_single_drone.sh
+  scripts/install_raynor_sitl.sh
   DESTINATION lib/${PROJECT_NAME}
 )
 install(PROGRAMS ${GESTELT_PYTHON_SCRIPTS} DESTINATION lib/${PROJECT_NAME})

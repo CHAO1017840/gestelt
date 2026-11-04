@@ -1,6 +1,14 @@
 <?xml version="1.0" ?>
 <sdf version='1.7'>
   <model name='raynor'>
+    <plugin name="vision_plugin" filename="libgazebo_vision_plugin.so">
+      <robotNamespace></robotNamespace>
+      <pubRate>30</pubRate>
+      <randomWalk>0.1</randomWalk>
+      <noiseDensity>0.01</noiseDensity>
+      <corellationTime>60.0</corellationTime>
+    </plugin>
+
     <link name='base_link'>
       <pose>0 0 0 0 0 0</pose>
       <inertial>
@@ -397,24 +405,21 @@
             <far>7.5</far>
           </clip>
         </camera>
-        <plugin filename="libgazebo_ros_openni_kinect.so" name="camera_controller">
-          <cameraName>camera</cameraName>
-          <robotNamespace></robotNamespace>
+        <plugin filename="libgazebo_ros_camera.so" name="camera_controller">
+          <ros>
+            <namespace>/drone0</namespace>
+            <remapping>camera/image_raw:=camera/image_raw</remapping>
+            <remapping>camera/camera_info:=camera/camera_info</remapping>
+            <remapping>camera/depth/image_raw:=camera/depth/image_raw</remapping>
+            <remapping>camera/depth/camera_info:=camera/depth/camera_info</remapping>
+            <remapping>camera/points:=camera/depth/points</remapping>
+          </ros>
+          <camera_name>camera</camera_name>
+          <frame_name>drone0_cam_link</frame_name>
+          <min_depth>0.01</min_depth>
+          <max_depth>7.5</max_depth>
           <alwaysOn>true</alwaysOn>
           <updateRate>20</updateRate>
-          <pointCloudCutoff>0.01</pointCloudCutoff>
-          <pointCloudCutoffMax>7.5</pointCloudCutoffMax>
-          <imageTopicName>rgb/image_raw</imageTopicName>
-          <cameraInfoTopicName>rgb/camera_info</cameraInfoTopicName>
-          <depthImageTopicName>depth/image_raw</depthImageTopicName>
-          <depthImageCameraInfoTopicName>depth/camera_info</depthImageCameraInfoTopicName>
-          <pointCloudTopicName>depth/points</pointCloudTopicName>
-          <frameName>camera_link</frameName>
-          <distortion_k1>0.0</distortion_k1>
-          <distortion_k2>0.0</distortion_k2>
-          <distortion_k3>0.0</distortion_k3>
-          <distortion_t1>0.0</distortion_t1>
-          <distortion_t2>0.0</distortion_t2>
         </plugin>
       </sensor>
     </link>
@@ -620,6 +625,7 @@
       <magSubTopic>/mag</magSubTopic>
       <gpsSubTopic>/gps</gpsSubTopic>
       <baroSubTopic>/baro</baroSubTopic>
+      <visionSubTopic>/vision_odom</visionSubTopic>
       <mavlink_addr>INADDR_ANY</mavlink_addr>
       <mavlink_tcp_port>4560</mavlink_tcp_port>
       <mavlink_udp_port>14560</mavlink_udp_port>
