@@ -284,8 +284,188 @@ Odometry 中：
 速度-only 方案缺少绝对位置修正，因此位置会随时间漂移。
 
 
-十、建议测试顺序
-----------------
+十、先起飞、中途失效的测试方法
+--------------------------------
+目标流程：
+
+  VIO/GPS 正常
+    -> 正常起飞
+    -> AI_IMU 以“影子模式”运行
+    -> 用 VIO/GPS 检查 AI 速度误差
+    -> 悬停时准备接管
+    -> 注入 VIO/GPS 失效
+    -> AI 速度成为速度观测
+    -> 立即观察 EKF2
+    -> 短时间测试后主动降落
+
+重要限制：
+
+  当前分支还不支持自动“影子模式 + 中途切换”。
+  use_ai_imu_velocity:=true 会从启动开始直接发布
+  /drone0/mavros/odometry/out，无法在飞行中按条件启用。
+
+  当前速度节点也没有使用 VIO/GPS 健康时的速度作为参考
+  进行在线偏置校准。
+
+  因此，下面 10.1 节可以在当前代码上测试。
+  10.2 和 10.3 节描述完整接管验收流程，必须先实现速度源仲裁和
+  健康参考校准，不能把当前节点直接当作已完成的中途接管系统。
+
+
+10.1 当前可执行的影子测试
+-------------------------
+第一步：PX4 使用 VIO 正常运行。
+
+  cd /home/cjc/ws_capstone/PX4-Autopilot
+  make px4_sitl gazebo-classic_iris_vision
+
+第二步：启动 Gestelt、VIO 和 MAVROS，但不把 AI 速度送入 PX4。
+
+  cd /home/cjc/ws_capstone/gestelt
+  source /opt/ros/humble/setup.bash
+  source install/setup.bash
+
+  ros2 launch gestelt_bringup scenario_ros2.launch.py \
+    scenario:=empty_map \
+    run_mission:=false \
+    use_gazebo:=false \
+    use_fake_drone:=false \
+    use_mavros:=true \
+    use_ai_imu:=true \
+    use_ai_imu_velocity:=false \
+    enforce_gps_off:=true
+
+第三步：在起飞前启动 AI 速度影子节点。
+
+  ros2 run imu_listener_pkg ai_imu_velocity.py \
+    --ros-args \
+    -r __ns:=/drone0 \
+    -p corrected_imu_topic:=mavros/ai/imu_corrected \
+    -p output_topic:=ai_imu/debug_odometry \
+    -p velocity_topic:=ai_imu/velocity \
+    -p initialization_samples:=200
+
+输出分别进入：
+
+  /drone0/ai_imu/debug_odometry
+  /drone0/ai_imu/velocity
+
+不会进入：
+
+  /drone0/mavros/odometry/out
+
+因此不会直接污染 PX4 EKF2。
+
+必须在起飞前保持静止，等待：
+
+  Stationary calibration complete: gyro_bias=[...]
+
+第四步：用 VIO 起飞并悬停。
+
+  python3 \
+    "$(ros2 pkg prefix gestelt_bringup)/share/gestelt_bringup/scenarios/empty_map.py"
+
+第五步：比较 AI 影子速度和 PX4/VIO 速度。
+
+  ros2 topic echo --once /drone0/ai_imu/velocity
+  ros2 topic echo --once \
+    /drone0/mavros/local_position/velocity_local
+
+建议至少持续观察 30 至 60 秒。
+
+影子测试验收条件建议：
+
+  - 静止 60 秒，AI 速度模长小于 0.1 m/s
+  - 悬停时，水平速度误差小于 0.3 m/s
+  - 悬停时，垂直速度误差小于 0.2 m/s
+  - x/y/z 正负号一致
+  - 无 NaN/Inf
+  - 无持续增长的偏置
+
+任何一个条件不满足，都不能进入中途接管测试。
+
+当前模型在 Gazebo iris 上曾经出现：
+
+  静止速度漂移超过 20 m/s
+  High Accelerometer Bias
+  height estimate unstable
+  velocity estimate error
+  pre_flight_checks_pass = 0
+
+因此必须先解决模型与仿真 IMU 的域匹配问题。
+
+
+10.2 正式接管测试的前置条件
+----------------------------
+以下“集成到场景自动运行”的功能尚未实现：
+
+  1. 自动启动、监控和记录 AI 影子速度
+  2. VIO/GPS 健康参考速度校准
+  3. 速度源仲裁器
+  4. 接管误差门限
+  5. 接管失败自动退出
+  6. VIO/GPS 恢复后的平滑切回
+
+不能通过给 /drone0/mavros/odometry/out 启动第二个发布者来完成切换。
+VIO 和 AI 同时写同一话题会造成来源竞争。
+
+应增加一个唯一的速度源仲裁节点：
+
+  VIO/GPS 健康
+    -> 只转发 VIO/GPS 观测
+
+  AI 健康且参考误差合格
+    -> 转发 AI 速度影子数据
+
+  来源不健康
+    -> 停止转发并触发降落
+
+
+10.3 实现后的完整测试顺序
+--------------------------
+1. 地面静止
+   - 启动 AI_IMU 修正
+   - 完成影子速度节点校准
+   - 确认静止速度稳定
+
+2. VIO/GPS 正常起飞
+   - 正常悬停
+   - AI 影子节点持续运行
+   - 不把 AI 速度发送给 PX4
+
+3. 健康参考校准
+   - 使用 PX4 或 VIO 速度估计 AI 加速度/姿态偏差
+   - 比较 AI 速度与参考速度
+   - 设定接管门限
+
+4. 悬停准备
+   - 保持位置悬停
+   - 确认 AI 速度误差在门限内
+   - 记录当前 EKF2 状态
+
+5. 先准备 AI 速度源
+   - 由仲裁节点启用 AI 速度
+   - 确认 PX4 能看到新的 ODOMETRY
+
+6. 再注入 VIO/GPS 失效
+   - PX4 pxh> failure vio off
+   - 或关闭 GPS
+   - 不应先失效再临时启动 AI 节点
+
+7. 接管观察
+   - listener estimator_status_flags
+   - listener vehicle_local_position
+   - 检查 cs_ev_vel、innovation、dead_reckoning
+   - 检查速度、高度和姿态是否稳定
+
+8. 立即结束测试
+   - 测试时间只保留 10 至 20 秒
+   - 主动降落
+   - 不要在第一次接管测试中继续执行任务航点
+
+
+10.4 常规分阶段测试
+--------------------
 1. 不上电机的台架测试
    - 静止放置
    - 检查修正 IMU 加速度
@@ -333,21 +513,28 @@ Odometry 中：
 
 十二、常见问题
 --------------
-1. 没有 /mavros/ai/imu_corrected
+1. AI 节点日志一直显示 raw=0 Hz
+
+   - 通常是没有启动 MAVROS。
+   - 检查 /drone0/mavros/imu/data_raw 的 Publisher count。
+   - 如果 Publisher count=0，说明只有 AI 订阅者，没有 IMU 发布者。
+   - 使用完整 scenario_ros2.launch.py，并设置 use_mavros:=true。
+
+2. 没有 /mavros/ai/imu_corrected
 
    - 检查 /drone0/mavros/imu/data_raw 是否有数据。
    - 检查 ONNX 窗口是否已经填满。
    - 等待至少 200 个输入样本。
    - 检查 onnxruntime 是否安装。
 
-2. 没有 /mavros/odometry/out
+3. 没有 /mavros/odometry/out
 
    - 检查 use_ai_imu 是否为 true。
    - 检查 use_ai_imu_velocity 是否为 true。
    - 检查修正 IMU 是否发布。
    - 检查是否启用了两个冲突的 velocity 节点。
 
-3. 静止速度不断增长
+4. 静止速度不断增长
 
    - 启动时是否保持静止。
    - 启动时是否水平。
@@ -355,7 +542,7 @@ Odometry 中：
    - 检查坐标轴映射。
    - 检查修正 IMU 静止加速度是否偏离重力方向。
 
-4. PX4 没有融合速度
+5. PX4 没有融合速度
 
    - 检查 EKF2_EV_CTRL=4。
    - 检查 GPS 是否关闭。
