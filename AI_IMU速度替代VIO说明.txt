@@ -1,9 +1,8 @@
 AI_IMU 修正 IMU + 速度观测接入 PX4 说明
 ========================================
-更新时间：2026-11-04
+更新时间：2026-11-05
 适用环境：Ubuntu 22.04 + ROS 2 Humble
 功能分支：feature/ai-imu-ros2
-最新提交：d0ddbb7 Add experimental AI IMU velocity estimator
 
 
 一、先明确“替代 VIO”的含义
@@ -616,6 +615,47 @@ use_ai_imu_velocity:=true 已经会自动启动该节点。
    - 检查 MAVROS odometry 插件是否启用。
    - 检查 /mavros/odometry/out 的 frame_id 和 child_frame_id。
    - 检查消息时间戳是否持续更新。
+
+6. Raynor 刚起飞就翻转
+
+   主要原因：
+     Raynor SDF 使用 Gazebo FLU 坐标，Y 轴向左为正；
+     PX4 控制分配使用 FRD 坐标，Y 轴向右为正。
+     如果 CA_ROTOR0..3_PY 直接照抄 SDF，滚转控制方向会反，
+     表现为升力增大后迅速滚转甚至翻转。
+
+   本仓库的正确值：
+     CA_ROTOR0_PY  0.056
+     CA_ROTOR1_PY -0.056
+     CA_ROTOR2_PY -0.056
+     CA_ROTOR3_PY  0.056
+
+   修改后必须重新安装 airframe：
+     cd /home/cjc/ws_capstone/gestelt
+     ./gestelt_bringup/scripts/install_raynor_sitl.sh \
+       /home/cjc/ws_capstone/PX4-Autopilot
+
+   PX4 SITL 会保存 parameters.bson。保存值优先于新的
+   param set-default，因此旧实验留下的参数必须备份后移走：
+     cd /home/cjc/ws_capstone/PX4-Autopilot/build/px4_sitl_default/rootfs
+     mv parameters.bson parameters.bson.before_raynor
+     if [ -f parameters_backup.bson ]; then
+       mv parameters_backup.bson parameters_backup.bson.before_raynor
+     fi
+
+   然后重新启动：
+     cd /home/cjc/ws_capstone/PX4-Autopilot
+     HEADLESS=1 make px4_sitl gazebo-classic_raynor
+
+   起飞后先在 pxh> 检查：
+     param show CA_ROTOR0_PY
+     param show CA_ROTOR1_PY
+     param show CA_ROTOR2_PY
+     param show CA_ROTOR3_PY
+
+   再用 listener vehicle_attitude_groundtruth 观察姿态。
+   正常起飞只应出现几度的小幅修正；为了飞向航点可以倾斜，
+   但不应连续滚转到 180 度。
 
 
 十三、关键文件

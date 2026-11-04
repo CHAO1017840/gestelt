@@ -11,6 +11,7 @@ MODEL_DST="${PX4_DIR}/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models
 AIRFRAME_DST="${PX4_DIR}/ROMFS/px4fmu_common/init.d-posix/airframes/1020_gazebo-classic_raynor"
 SITL_CMAKE="${PX4_DIR}/src/modules/simulation/simulator_mavlink/sitl_targets_gazebo-classic.cmake"
 AIRFRAME_CMAKE="${PX4_DIR}/ROMFS/px4fmu_common/init.d-posix/airframes/CMakeLists.txt"
+ROOTFS_DIR="${PX4_DIR}/build/px4_sitl_default/rootfs"
 
 if [ ! -d "${PX4_DIR}" ]; then
   echo "PX4-Autopilot not found: ${PX4_DIR}" >&2
@@ -45,6 +46,17 @@ echo "Installed Raynor SITL model:"
 echo "  model:    ${MODEL_DST}"
 echo "  airframe: ${AIRFRAME_DST}"
 echo
+
+if [ -f "${ROOTFS_DIR}/parameters.bson" ]; then
+  echo "WARNING: saved SITL parameters already exist:"
+  echo "  ${ROOTFS_DIR}/parameters.bson"
+  echo "They override new airframe defaults, including the control-allocation frame."
+  echo "Before the first test, back them up and remove them:"
+  echo "  mv ${ROOTFS_DIR}/parameters.bson ${ROOTFS_DIR}/parameters.bson.before_raynor"
+  echo "  if [ -f ${ROOTFS_DIR}/parameters_backup.bson ]; then mv ${ROOTFS_DIR}/parameters_backup.bson ${ROOTFS_DIR}/parameters_backup.bson.before_raynor; fi"
+  echo
+fi
+
 echo "Rebuild the SITL target if it is not listed:"
 echo "  cd ${PX4_DIR}"
 echo "  DONT_RUN=1 make px4_sitl gazebo-classic_raynor"
