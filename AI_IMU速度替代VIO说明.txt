@@ -284,42 +284,64 @@ Odometry 中：
 速度-only 方案缺少绝对位置修正，因此位置会随时间漂移。
 
 
-十、先起飞、中途失效的测试方法
---------------------------------
+十、先起飞、中途失效的测试方法（直接输入模式）
+------------------------------------------------
 目标流程：
 
   VIO/GPS 正常
+    -> AI_IMU 节点从启动开始直接发布速度
+    -> VIO 和 AI 速度同时输入 PX4
     -> 正常起飞
-    -> AI_IMU 以“影子模式”运行
-    -> 用 VIO/GPS 检查 AI 速度误差
-    -> 悬停时准备接管
     -> 注入 VIO/GPS 失效
-    -> AI 速度成为速度观测
-    -> 立即观察 EKF2
+    -> 保持 AI 速度观测
+    -> 观察 EKF2
     -> 短时间测试后主动降落
 
-重要限制：
+本测试采用和之前 AI_IMU 节点相同的直接输入方式，不使用影子模式。
 
-  当前分支还不支持自动“影子模式 + 中途切换”。
-  use_ai_imu_velocity:=true 会从启动开始直接发布
-  /drone0/mavros/odometry/out，无法在飞行中按条件启用。
+直接输入的含义：
 
-  当前速度节点也没有使用 VIO/GPS 健康时的速度作为参考
-  进行在线偏置校准。
+  use_ai_imu_velocity:=true
+    -> 自动启动 ai_imu_velocity.py
+    -> 从启动开始直接发布 /drone0/mavros/odometry/out
+    -> MAVROS 将速度转换成 MAVLink ODOMETRY
+    -> PX4 与 VIO 一起融合
 
-  因此，下面 10.1 节可以在当前代码上测试。
-  10.2 和 10.3 节描述完整接管验收流程，必须先实现速度源仲裁和
-  健康参考校准，不能把当前节点直接当作已完成的中途接管系统。
+不能同时设置：
+
+  use_ai_velocity:=true
+
+否则会启动另一个速度桥接节点，产生重复发布者。
+
+直接输入模式的风险：
+
+  AI 速度在起飞前就已经进入 PX4 EKF2。
+  如果 AI 速度在静止时漂移，会直接导致预飞失败。
+  因此启动后必须先完成静止校准，并确认速度接近零。
 
 
-10.1 当前可执行的影子测试
--------------------------
+10.1 直接输入模式启动流程
+--------------------------
 第一步：PX4 使用 VIO 正常运行。
 
   cd /home/cjc/ws_capstone/PX4-Autopilot
   make px4_sitl gazebo-classic_iris_vision
 
-第二步：启动 Gestelt、VIO 和 MAVROS，但不把 AI 速度送入 PX4。
+第二步：设置 PX4 同时使用 VIO 位置和 AI 速度。
+
+  在 PX4 pxh> 执行：
+    param set EKF2_EV_CTRL 7
+    param set EKF2_GPS_CTRL 0
+    param save
+
+  EKF2_EV_CTRL=7 表示外部视觉同时使用：
+    - 水平位置
+    - 高度
+    - 3D 速度
+
+  VIO 提供位置和高度，AI_IMU 提供速度。
+
+第三步：启动 Gestelt、VIO、MAVROS 和 AI 速度节点。
 
   cd /home/cjc/ws_capstone/gestelt
   source /opt/ros/humble/setup.bash
@@ -332,41 +354,48 @@ Odometry 中：
     use_fake_drone:=false \
     use_mavros:=true \
     use_ai_imu:=true \
-    use_ai_imu_velocity:=false \
+    use_ai_imu_velocity:=true \
     enforce_gps_off:=true
 
-第三步：在起飞前启动 AI 速度影子节点。
+启动后，不要另外运行 ai_imu_velocity.py。
+use_ai_imu_velocity:=true 已经会自动启动该节点。
 
-  ros2 run imu_listener_pkg ai_imu_velocity.py \
-    --ros-args \
-    -r __ns:=/drone0 \
-    -p corrected_imu_topic:=mavros/ai/imu_corrected \
-    -p output_topic:=ai_imu/debug_odometry \
-    -p velocity_topic:=ai_imu/velocity \
-    -p initialization_samples:=200
-
-输出分别进入：
-
-  /drone0/ai_imu/debug_odometry
-  /drone0/ai_imu/velocity
-
-不会进入：
-
-  /drone0/mavros/odometry/out
-
-因此不会直接污染 PX4 EKF2。
-
-必须在起飞前保持静止，等待：
+必须在起飞前保持静止。
+等待 AI 速度节点日志出现：
 
   Stationary calibration complete: gyro_bias=[...]
 
-第四步：运行飞行脚本。
+第四步：确认 VIO 和 AI 速度同时被 PX4 使用。
+
+  检查话题：
+    ros2 topic hz /drone0/mavros/imu/data_raw
+    ros2 topic hz /drone0/mavros/ai/imu_corrected
+    ros2 topic hz /drone0/mavros/odometry/out
+
+  检查 AI 速度：
+    ros2 topic echo --once \
+      /drone0/mavros/odometry/out \
+      --field twist.twist.linear
+
+  静止时应接近：
+    x: 0
+    y: 0
+    z: 0
+
+  在 PX4 pxh> 检查：
+    listener estimator_status_flags
+
+  起飞前应确认：
+    cs_gps: False
+    cs_ev_pos: True
+    cs_ev_hgt: True
+    cs_ev_vel: True
+    cs_inertial_dead_reckoning: False
+
+第五步：运行飞行脚本。
 
   飞行脚本文件：
     gestelt_bringup/src/scenarios/empty_map.py
-
-  安装后的路径：
-    install/gestelt_bringup/share/gestelt_bringup/scenarios/empty_map.py
 
   执行命令：
     cd /home/cjc/ws_capstone/gestelt
@@ -400,146 +429,95 @@ Odometry 中：
     3. 发送航点 (2, 2, 2)
     4. 发送航点 (5, 5, 1)
 
-  这不是单纯悬停脚本。对于第一次影子速度对比，
-  应先保持位置悬停完成 30 至 60 秒的速度比较，
-  再运行 empty_map.py 执行航点。
+  飞行脚本会执行 HOVER -> MISSION，并发送航点。
+  如果只想先起飞悬停测试，不要运行 empty_map.py；
+  待轨迹服务器进入 HOVER 后直接进行 VIO 失效测试。
 
-  如果只需要执行固定测试流程，也可以在 scenario 启动时使用：
-    run_mission:=true
-
-  但不建议在 AI_IMU 测试中使用自动任务，因为现有 launch 固定
-  3 秒后执行飞行脚本，可能早于以下步骤完成：
-    - MAVROS 连接
-    - AI_IMU 200 帧预热
-    - AI 速度 200 帧静止校准
-    - PX4 预飞检查
-
-  因此 AI_IMU 测试应保持 run_mission:=false，
-  检查全部通过后再手动执行飞行脚本。
-
-第五步：比较 AI 影子速度和 PX4/VIO 速度。
-
-  ros2 topic echo --once /drone0/ai_imu/velocity
-  ros2 topic echo --once \
-    /drone0/mavros/local_position/velocity_local
-
-建议至少持续观察 30 至 60 秒。
-
-影子测试验收条件建议：
-
-  - 静止 60 秒，AI 速度模长小于 0.1 m/s
-  - 悬停时，水平速度误差小于 0.3 m/s
-  - 悬停时，垂直速度误差小于 0.2 m/s
-  - x/y/z 正负号一致
-  - 无 NaN/Inf
-  - 无持续增长的偏置
-
-任何一个条件不满足，都不能进入中途接管测试。
-
-当前模型在 Gazebo iris 上曾经出现：
-
-  静止速度漂移超过 20 m/s
-  High Accelerometer Bias
-  height estimate unstable
-  velocity estimate error
-  pre_flight_checks_pass = 0
-
-因此必须先解决模型与仿真 IMU 的域匹配问题。
+  自动 run_mission:=true 不推荐，因为 launch 固定 3 秒后执行任务，
+  可能早于 AI 窗口预热和静止校准。
 
 
-10.2 正式接管测试的前置条件
-----------------------------
-以下“集成到场景自动运行”的功能尚未实现：
+10.2 飞行中手动断开 VIO
+------------------------
+直接输入模式下，VIO 和 AI 速度已经在起飞前同时工作。
+飞到预定位置并稳定悬停后，可以手动断开 VIO：
 
-  1. 自动启动、监控和记录 AI 影子速度
-  2. VIO/GPS 健康参考速度校准
-  3. 速度源仲裁器
-  4. 接管误差门限
-  5. 接管失败自动退出
-  6. VIO/GPS 恢复后的平滑切回
+  在 PX4 pxh> 执行：
+    param set SYS_FAILURE_EN 1
+    failure vio off
 
-不能通过给 /drone0/mavros/odometry/out 启动第二个发布者来完成切换。
-VIO 和 AI 同时写同一话题会造成来源竞争。
+  手动恢复：
+    failure vio ok
 
-应增加一个唯一的速度源仲裁节点：
+也可以通过 ROS 2 和 MAVROS 发送 Manual CommandLong：
 
-  VIO/GPS 健康
-    -> 只转发 VIO/GPS 观测
+  ros2 service call /drone0/mavros/cmd/command \
+    mavros_msgs/srv/CommandLong \
+    "{broadcast: false, command: 420, confirmation: 0, \
+    param1: 6.0, param2: 1.0, \
+    param3: 0.0, param4: 0.0, param5: 0.0, \
+    param6: 0.0, param7: 0.0}"
 
-  AI 健康且参考误差合格
-    -> 转发 AI 速度影子数据
+恢复时把 param2 改为 0.0。
 
-  来源不健康
-    -> 停止转发并触发降落
+参数含义：
+  command=420  MAV_CMD_INJECT_FAILURE
+  param1=6     VIO
+  param2=1     off
+  param2=0     ok
+
+断开 VIO 后，PX4 应继续使用 AI 外部速度。
+如果 AI 速度没有被 EKF2 接受，PX4 会触发失效保护并盲降。
 
 
-10.3 实现后的完整测试顺序
---------------------------
-1. 地面静止
-   - 启动 AI_IMU 修正
-   - 完成影子速度节点校准
-   - 确认静止速度稳定
+10.3 断开 VIO 后的观察与结束
+------------------------------
+1. 断开前检查
+   listener estimator_status_flags
 
-2. VIO/GPS 正常起飞
-   - 正常悬停
-   - AI 影子节点持续运行
-   - 不把 AI 速度发送给 PX4
+   应确认：
+     cs_gps: False
+     cs_ev_pos: True
+     cs_ev_hgt: True
+     cs_ev_vel: True
+     cs_inertial_dead_reckoning: False
 
-3. 健康参考校准
-   - 使用 PX4 或 VIO 速度估计 AI 加速度/姿态偏差
-   - 比较 AI 速度与参考速度
-   - 设定接管门限
+2. 悬停中断开 VIO
+   failure vio off
 
-4. 悬停准备
-   - 保持位置悬停
-   - 确认 AI 速度误差在门限内
-   - 记录当前 EKF2 状态
+3. 断开后立即检查
+   listener estimator_status_flags
+   listener vehicle_local_position
 
-5. 先准备 AI 速度源
-   - 由仲裁节点启用 AI 速度
-   - 确认 PX4 能看到新的 ODOMETRY
+   预期变化：
+     cs_ev_pos: False
+     cs_ev_hgt: False
+     cs_ev_vel: True
 
-6. 再注入 VIO/GPS 失效
-   - PX4 pxh> failure vio off
-   - 或关闭 GPS
-   - 不应先失效再临时启动 AI 节点
+   如果 PX4 只能使用 AI 速度，水平位置会进入惯性推算，
+   因此 dead_reckoning 可能变为 True，位置会逐渐漂移。
 
-   手动 VIO 失效方式 A，在 PX4 pxh> 输入：
-     param set SYS_FAILURE_EN 1
-     failure vio off
+4. 检查 AI 速度是否继续发布
+   ros2 topic hz /drone0/mavros/odometry/out
+   ros2 topic echo --once \
+     /drone0/mavros/odometry/out \
+     --field twist.twist.linear
 
-   手动恢复 VIO：
-     failure vio ok
+5. 检查 PX4 是否进入保护
+   如果出现：
+     cs_ev_vel: False
+     local_velocity_invalid: True
+     local_position_invalid: True
+     Failsafe: blind land
 
-   手动 VIO 失效方式 B，在 ROS 2 终端发送：
-     ros2 service call /drone0/mavros/cmd/command \
-       mavros_msgs/srv/CommandLong \
-       "{broadcast: false, command: 420, confirmation: 0, \
-       param1: 6.0, param2: 1.0, \
-       param3: 0.0, param4: 0.0, param5: 0.0, \
-       param6: 0.0, param7: 0.0}"
+   说明 AI 速度已经停止、时间戳过期、误差过大或被 EKF2 拒绝。
+   PX4 触发盲降和自动上锁是正常失效保护。
 
-   手动恢复时只把 param2 改为 0.0：
-     "{broadcast: false, command: 420, confirmation: 0, \
-     param1: 6.0, param2: 0.0, \
-     param3: 0.0, param4: 0.0, param5: 0.0, \
-     param6: 0.0, param7: 0.0}"
-
-   command=420 为 MAV_CMD_INJECT_FAILURE
-   param1=6 为 VIO
-   param2=1 为失效
-   param2=0 为恢复
-
-7. 接管观察
-   - listener estimator_status_flags
-   - listener vehicle_local_position
-   - 检查 cs_ev_vel、innovation、dead_reckoning
-   - 检查速度、高度和姿态是否稳定
-
-8. 立即结束测试
-   - 测试时间只保留 10 至 20 秒
-   - 主动降落
-   - 不要在第一次接管测试中继续执行任务航点
+6. 立即结束测试
+   - 断开 VIO 后只观察 10 至 20 秒
+   - 主动恢复 VIO 或主动降落
+   - 不要在第一次测试中继续执行任务航点
+   - 记录 ULog 中的 cs_ev_vel、innovation 和 failsafe
 
 
 10.4 常规分阶段测试
