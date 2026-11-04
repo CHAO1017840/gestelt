@@ -1,0 +1,403 @@
+AI_IMU 修正 IMU + 速度观测接入 PX4 说明
+========================================
+更新时间：2026-11-04
+适用环境：Ubuntu 22.04 + ROS 2 Humble
+功能分支：feature/ai-imu-ros2
+最新提交：d0ddbb7 Add experimental AI IMU velocity estimator
+
+
+一、先明确“替代 VIO”的含义
+----------------------------
+当前方案不是用一个噪声协方差直接替代 VIO。
+
+AI_IMU 模型输出：
+  1. 修正后的加速度
+  2. 修正后的角速度
+  3. 加速度噪声/方差
+  4. 角速度噪声/方差
+
+速度节点使用修正后的加速度和角速度做捷联积分：
+
+  角速度 -> 姿态积分
+  加速度 -> 去重力 -> 世界坐标系速度积分
+
+最终只向 PX4 提供速度观测，不提供可信位置。
+
+因此这是“速度-only 外部导航”，不是完整 VIO。
+长期运行会漂移，不能直接用于未经测试的实机自主飞行。
+
+
+二、数据流
+----------
+原始 IMU：
+  /drone0/mavros/imu/data_raw
+  sensor_msgs/msg/Imu
+
+AI 修正：
+  /drone0/mavros/ai/imu_corrected
+  sensor_msgs/msg/Imu
+
+AI 噪声输出，可选监控：
+  /drone0/mavros/ai/imu_noise
+  ai_msgs/msg/ImuNoise
+
+速度估计：
+  /drone0/mavros/odometry/out
+  nav_msgs/msg/Odometry
+
+兼容速度话题：
+  /drone0/ai_imu/velocity
+  geometry_msgs/msg/Vector3Stamped
+
+MAVROS 将 /mavros/odometry/out 转换为 MAVLink ODOMETRY，
+PX4 再将其作为外部速度观测送入 EKF2。
+
+
+三、构建
+--------
+终端执行：
+
+  cd /home/cjc/ws_capstone/gestelt
+  source /opt/ros/humble/setup.bash
+
+  python3 -m pip install --user -r \
+    imu_listener_pkg/requirements.txt
+
+  colcon build --symlink-install \
+    --packages-select ai_msgs imu_listener_pkg
+
+  source install/setup.bash
+
+检查 ONNX Runtime：
+
+  python3 -c \
+    "import onnxruntime, numpy; \
+     print(onnxruntime.__version__, numpy.__version__)"
+
+注意：
+  - 如果现有 NumPy 已经满足依赖，不要盲目升级或降级。
+  - 当前环境已经验证 NumPy 1.26.4 和 2.2.6。
+  - 某些 ROS 包依赖 NumPy 1.x ABI，较新的 OpenCV 又可能要求 NumPy 2.x。
+
+
+四、PX4 设置
+------------
+本方案不使用 iris_vision 的 VIO 输出。建议先使用普通 iris SITL：
+
+  cd /home/cjc/ws_capstone/PX4-Autopilot
+  make px4_sitl gazebo-classic_iris
+
+等待：
+
+  Ready for takeoff!
+
+在 PX4 的 pxh> 终端执行：
+
+  param set EKF2_EV_CTRL 4
+  param set EKF2_GPS_CTRL 0
+  param set EKF2_HGT_REF 0
+  param save
+
+参数含义：
+
+  EKF2_EV_CTRL=4
+    只使用外部 3D 速度观测。
+
+  EKF2_GPS_CTRL=0
+    不融合 GPS。
+
+  EKF2_HGT_REF=0
+    高度参考使用气压计。
+
+EKF2_HGT_REF 是重启生效参数。保存参数后应重启 PX4。
+
+如需测试故障保护：
+
+  param set SYS_FAILURE_EN 1
+
+
+五、启动 Gestelt、MAVROS 和 AI_IMU 速度节点
+-------------------------------------------
+终端 2：
+
+  cd /home/cjc/ws_capstone/gestelt
+  source /opt/ros/humble/setup.bash
+  source install/setup.bash
+
+  ros2 launch gestelt_bringup scenario_ros2.launch.py \
+    scenario:=empty_map \
+    run_mission:=false \
+    use_rviz:=true \
+    use_gazebo:=false \
+    use_fake_drone:=false \
+    use_mavros:=true \
+    use_ai_imu:=true \
+    use_ai_imu_velocity:=true \
+    ai_imu_inference_stride:=1 \
+    enforce_gps_off:=true
+
+关键参数：
+
+  use_ai_imu:=true
+    启动 AI_IMU ONNX 修正节点。
+
+  use_ai_imu_velocity:=true
+    启动修正 IMU 速度节点。
+
+  ai_imu_inference_stride:=1
+    每帧都推理。当前机器约 1 ms/次，可接近 200 Hz。
+
+  use_mavros:=true
+    启动 MAVROS。速度 ODOMETRY 需要 MAVROS。
+
+  enforce_gps_off:=true
+    自动设置 EKF2_GPS_CTRL=0 并阻断 HIL_GPS。
+
+不要同时设置：
+
+  use_ai_velocity:=true
+
+因为 use_ai_velocity 会启动另一个速度桥接节点，
+造成两个发布者同时写 /drone0/mavros/odometry/out。
+
+如果只启动 AI_IMU 包，也可以直接运行：
+
+  ros2 launch imu_listener_pkg ai_imu_ros2.launch.py \
+    namespace:=drone0 \
+    enable_velocity_estimator:=true \
+    inference_stride:=1
+
+
+六、静止校准
+------------
+速度节点默认要求 200 个修正 IMU 样本用于静态校准：
+
+  ai_imu_velocity_initialization_samples=200
+
+校准内容：
+
+  - 修正陀螺零偏
+  - 修正残余重力/加速度偏置
+
+校准期间速度保持为零。
+
+输出频率约 200 Hz 时：
+  200 个样本约 1 秒
+
+默认推理 stride=5、输出约 40 Hz 时：
+  200 个样本约 5 秒
+
+启动条件：
+
+  - 无人机必须静止。
+  - 无人机必须水平放置。
+  - 当前姿态积分从 identity 姿态开始。
+  - 初始 yaw 无法仅靠加速度观测确定。
+
+校准完成日志应出现：
+
+  Stationary calibration complete: gyro_bias=[...]
+
+校准完成前不要起飞。
+
+
+七、检查 AI 修正数据
+--------------------
+检查修正 IMU：
+
+  ros2 topic echo --once \
+    /drone0/mavros/ai/imu_corrected
+
+检查频率：
+
+  ros2 topic hz /drone0/mavros/ai/imu_corrected
+
+静止、水平放置时，修正后的加速度应接近：
+
+  linear_acceleration:
+    x: 接近 0
+    y: 接近 0
+    z: 接近 +9.81
+
+注意：
+  模型只有在 200 帧窗口填满后才发布修正 IMU。
+  因此启动后不会立即出现 /mavros/ai/imu_corrected。
+
+
+八、检查速度输出
+----------------
+只看线性速度：
+
+  ros2 topic echo --once \
+    /drone0/mavros/odometry/out \
+    --field twist.twist.linear
+
+检查频率：
+
+  ros2 topic hz /drone0/mavros/odometry/out
+
+检查兼容速度话题：
+
+  ros2 topic echo --once /drone0/ai_imu/velocity
+  ros2 topic hz /drone0/ai_imu/velocity
+
+静止校准后的静止状态应接近：
+
+  x: 0
+  y: 0
+  z: 0
+
+Odometry 中：
+
+  pose.position 为 NaN
+  pose.covariance 很大
+  twist.twist.linear 是有效速度
+  twist.covariance 是速度协方差
+
+这意味着 PX4 只能使用速度，不应把 pose 当成位置。
+
+
+九、检查 MAVROS 和 PX4
+----------------------
+检查 MAVROS 输出：
+
+  ros2 topic hz /drone0/mavros/odometry/out
+  ros2 topic echo --once /drone0/mavros/odometry/out
+
+在 PX4 pxh> 检查：
+
+  listener estimator_status_flags
+  listener vehicle_local_position
+  listener vehicle_visual_odometry
+
+重点确认：
+
+  cs_gps: False
+  cs_gps_hgt: False
+  cs_ev_vel: True
+
+没有 VIO 位置时，不要期待长期稳定的：
+
+  cs_ev_pos: True
+  cs_ev_hgt: True
+
+速度-only 方案缺少绝对位置修正，因此位置会随时间漂移。
+
+
+十、建议测试顺序
+----------------
+1. 不上电机的台架测试
+   - 静止放置
+   - 检查修正 IMU 加速度
+   - 检查静态校准
+   - 检查静止输出速度是否接近零
+
+2. SITL 链路测试
+   - 使用普通 iris
+   - 设置 EKF2_EV_CTRL=4
+   - 关闭 GPS
+   - 检查 MAVROS ODOMETRY 与 PX4 cs_ev_vel
+
+3. 受控小幅运动
+   - 检查速度正负号和坐标轴
+   - 检查 1 m/s、2 m/s 等已知速度
+   - 检查前后、左右、上下方向
+
+4. 长时间测试
+   - 观察速度漂移
+   - 观察姿态漂移
+   - 观察 EKF2 是否发生 inconsistent
+
+5. 实机测试
+   - 必须有安全员
+   - 必须可立即切手动
+   - 不得直接依赖该速度做长航时自主定位
+
+
+十一、坐标轴
+------------
+默认将 MAVROS FLU 输入映射为模型使用的 [z, -y, x]：
+
+  ai_imu_remap_mavros_axes:=true
+
+如果实际硬件输入已经是模型坐标系，设置为：
+
+  ai_imu_remap_mavros_axes:=false
+
+上线前必须分别验证：
+
+  - 加速度 x/y/z 方向
+  - 角速度 x/y/z 方向
+  - 积分后的世界速度方向
+
+
+十二、常见问题
+--------------
+1. 没有 /mavros/ai/imu_corrected
+
+   - 检查 /drone0/mavros/imu/data_raw 是否有数据。
+   - 检查 ONNX 窗口是否已经填满。
+   - 等待至少 200 个输入样本。
+   - 检查 onnxruntime 是否安装。
+
+2. 没有 /mavros/odometry/out
+
+   - 检查 use_ai_imu 是否为 true。
+   - 检查 use_ai_imu_velocity 是否为 true。
+   - 检查修正 IMU 是否发布。
+   - 检查是否启用了两个冲突的 velocity 节点。
+
+3. 静止速度不断增长
+
+   - 启动时是否保持静止。
+   - 启动时是否水平。
+   - 等待静态校准完成。
+   - 检查坐标轴映射。
+   - 检查修正 IMU 静止加速度是否偏离重力方向。
+
+4. PX4 没有融合速度
+
+   - 检查 EKF2_EV_CTRL=4。
+   - 检查 GPS 是否关闭。
+   - 检查 MAVROS odometry 插件是否启用。
+   - 检查 /mavros/odometry/out 的 frame_id 和 child_frame_id。
+   - 检查消息时间戳是否持续更新。
+
+
+十三、关键文件
+--------------
+AI 推理节点：
+  imu_listener_pkg/src/ai_imu_client.py
+
+速度节点：
+  imu_listener_pkg/src/ai_imu_velocity.py
+
+速度积分核心：
+  imu_listener_pkg/src/strapdown_velocity_estimator.py
+
+模型：
+  imu_listener_pkg/models/airimu_cpu_fp32_cov_200.onnx
+
+ROS 2 launch：
+  imu_listener_pkg/launch/ai_imu_ros2.launch.py
+
+场景集成：
+  gestelt_bringup/launch/scenario_ros2.launch.py
+
+
+十四、安全限制
+--------------
+本方案是实验性速度-only 观测。
+
+它没有：
+  - 绝对位置观测
+  - 视觉回环
+  - GPS 位置
+  - 光流位置
+  - 测距位置
+  - 长期零偏稳定性保证
+
+加速度和陀螺零偏、姿态误差、坐标轴错误都会造成速度漂移。
+
+不要仅凭一次 SITL 成功就直接用于真实飞行。
+正式使用前应由飞控/导航负责人复核状态估计、故障保护和失效策略。
