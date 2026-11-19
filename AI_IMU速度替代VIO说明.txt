@@ -4,6 +4,28 @@ AI_IMU 修正 IMU + 速度观测接入 PX4 说明
 适用环境：Ubuntu 22.04 + ROS 2 Humble
 功能分支：feature/ai-imu-ros2
 
+重要状态（当前实现）
+--------------------
+本说明保留为历史实验记录。
+
+corrected AI_IMU 积分速度存在明显漂移，当前禁止用于导航：
+
+  use_ai_imu_velocity=false
+  use_ai_imu_comparison=false
+  use_gazebo_vio_bridge=false
+
+ai_imu_velocity.py、ai_imu_comparison.py 和 ai_failover.py 默认拒绝运行。
+不要设置 allow_velocity_estimation=true 或
+allow_ai_velocity_navigation=true。
+
+受控测试模式使用 COM_POS_FS_HOLD=1，SITL 与真实硬件共享同一 PX4 实现：
+飞机解锁且水平位置/速度首次有效后，EKF2 继续发布 xy_valid/v_xy_valid，
+Commander 同时保持水平 invalid=False。VIO 失效后位置控制继续使用
+惯性传播，但估计会漂移。
+
+该行为只用于受控故障响应测试。COM_POS_FS_HOLD 默认值为 0，
+生产配置必须保持禁用，也不能把 AI 积分速度当成独立观测。
+
 
 一、先明确“替代 VIO”的含义
 ----------------------------

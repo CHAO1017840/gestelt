@@ -71,10 +71,62 @@ class StrapdownVelocityEstimatorTest(unittest.TestCase):
         self.assertTrue(estimator.initialized)
         np.testing.assert_allclose(velocity, np.zeros(3), atol=1.0e-10)
         np.testing.assert_allclose(
-            estimator.gravity_bias_world,
+            estimator.accel_bias_body,
             np.array([0.05, -0.1, -0.06007]),
             atol=1.0e-6,
         )
+
+    def test_tilted_calibration_uses_current_orientation(self):
+        estimator = StrapdownVelocityEstimator(
+            gravity=9.81007, initialization_samples=20
+        )
+        roll_10_degrees = np.radians(10.0) * 0.5
+        orientation = np.array(
+            [np.sin(roll_10_degrees), 0.0, 0.0, np.cos(roll_10_degrees)]
+        )
+        estimator.set_state_from_body_velocity(
+            np.zeros(3),
+            orientation,
+        )
+        body_gravity = estimator.world_to_body_velocity(
+            np.array([0.0, 0.0, 9.81007])
+        )
+
+        for index in range(21):
+            estimator.update(
+                body_gravity,
+                np.zeros(3),
+                index * 0.02,
+            )
+
+        np.testing.assert_allclose(
+            estimator.accel_bias_body,
+            np.zeros(3),
+            atol=1.0e-6,
+        )
+
+    def test_body_bias_is_correct_after_attitude_changes(self):
+        estimator = StrapdownVelocityEstimator(
+            gravity=9.81007, initialization_samples=0
+        )
+        estimator.accel_bias_body = np.array([0.05, -0.1, 0.2])
+        yaw_90 = np.array(
+            [0.0, 0.0, np.sqrt(0.5), np.sqrt(0.5)]
+        )
+        estimator.set_orientation(yaw_90)
+        gravity_body = estimator.world_to_body_velocity(
+            np.array([0.0, 0.0, 9.81007])
+        )
+        acceleration = gravity_body + estimator.accel_bias_body
+
+        for index in range(101):
+            velocity, _, _ = estimator.update(
+                acceleration,
+                np.zeros(3),
+                index * 0.01,
+            )
+
+        np.testing.assert_allclose(velocity, np.zeros(3), atol=1.0e-10)
 
     def test_seed_state_rotates_body_velocity_to_world(self):
         estimator = StrapdownVelocityEstimator(initialization_samples=0)
@@ -115,6 +167,46 @@ class StrapdownVelocityEstimatorTest(unittest.TestCase):
         np.testing.assert_allclose(
             body_covariance,
             np.diag([2.0, 1.0, 3.0]),
+            atol=1.0e-10,
+        )
+
+    def test_world_acceleration_bias_is_removed_before_integration(self):
+        estimator = StrapdownVelocityEstimator(
+            gravity=9.81007, initialization_samples=0
+        )
+        estimator.set_world_accel_bias(
+            np.array([0.1, -0.2, 0.05])
+        )
+
+        acceleration = np.array([0.1, -0.2, 9.86007])
+        for index in range(201):
+            velocity, _, _ = estimator.update(
+                acceleration,
+                np.zeros(3),
+                index * 0.005,
+            )
+
+        np.testing.assert_allclose(velocity, np.zeros(3), atol=1.0e-10)
+        np.testing.assert_allclose(
+            estimator.last_accel_world_observed,
+            np.array([0.1, -0.2, 0.05]),
+            atol=1.0e-6,
+        )
+
+    def test_body_to_world_velocity_uses_current_orientation(self):
+        estimator = StrapdownVelocityEstimator(initialization_samples=0)
+        yaw_90 = np.array(
+            [0.0, 0.0, np.sqrt(0.5), np.sqrt(0.5)]
+        )
+        estimator.set_orientation(yaw_90)
+
+        world_velocity = estimator.body_to_world_velocity(
+            np.array([1.0, 0.0, 0.0])
+        )
+
+        np.testing.assert_allclose(
+            world_velocity,
+            np.array([0.0, 1.0, 0.0]),
             atol=1.0e-10,
         )
 

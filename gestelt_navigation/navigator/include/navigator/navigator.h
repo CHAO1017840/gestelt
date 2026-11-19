@@ -226,6 +226,21 @@ private:
   void stopAllPlanning();
 
   /**
+   * @brief Reset the back-end planning failure backoff.
+   */
+  void resetPlanningFailureBackoff();
+
+  /**
+   * @brief Register a failed back-end planning attempt and schedule the next.
+   */
+  void registerPlanningFailure();
+
+  /**
+   * @brief Register a successful back-end planning attempt.
+   */
+  void registerPlanningSuccess();
+
+  /**
    * @brief Request a back end plan and if successful, save it and broadcast to other agents.
    * 
    * @return true 
@@ -311,6 +326,7 @@ private:
     // 2. Continuous re-planning
     waypoints_.reset();
     waypoints_.addWP(goal_pos);
+    resetPlanningFailureBackoff();
   }
 
   /**
@@ -340,6 +356,7 @@ private:
     }
 
     waypoints_.addMultipleWP(wp_vec);
+    resetPlanningFailureBackoff();
   }
 
 
@@ -385,6 +402,7 @@ private:
           msg->position.x,
           msg->position.y,
           msg->position.z});
+    resetPlanningFailureBackoff();
   }
 
   /**
@@ -400,6 +418,7 @@ private:
       waypoints_.nextWP()(0), waypoints_.nextWP()(1), waypoints_.nextWP()(2))
     );
 
+    resetPlanningFailureBackoff();
     generateFrontEndPlan(cur_pos_, waypoints_.nextWP(), ssfc_);
   }
 
@@ -639,6 +658,13 @@ private: /* Params */
   int optimizer_num_retries_{-1}; // Number of retries for back-end optimizer
   int num_cstr_pts_per_seg_{-1}; // Number of constraint points per segment
   double segment_length_{-1.0}; // length of polynomial segment
+
+  /* Back-end failure backoff */
+  double planning_failure_backoff_initial_{0.5}; // [s] First retry delay
+  double planning_failure_backoff_max_{2.0}; // [s] Maximum retry delay
+  double planning_failure_backoff_multiplier_{2.0};
+  int consecutive_planning_failures_{0};
+  double next_planning_attempt_time_{0.0};
   
   /* Collision checking params*/
   double swarm_clearance_{-1.0}; // Required clearance between swarm agents

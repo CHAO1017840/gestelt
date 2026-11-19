@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# Gestelt GPS-denied VIO + AI 速度回退仿真一键启动脚本
-# 对应文档: gestelt/AI速度回退说明.txt
+# Gestelt GPS-denied VIO + AI_IMU 推理诊断仿真启动脚本
+# AI_IMU 速度积分路径默认禁用。
 #
 # 用法:
 #   vio_ai_experiment.sh [选项]     # 新建 tmux 会话并自动拉起整套仿真
 #   vio_ai_experiment.sh stop       # 关闭整个仿真会话
 #
 # 选项:
-#   -s SCENARIO   场景名, 默认 empty_map
-#   -m            自动运行任务脚本 (launch run_mission:=true)
+#   -s SCENARIO   场景名, 默认 rmuc2025
+#   -H            仅自动起飞并保持悬停（默认）
+#   -m            自动起飞并运行场景导航任务
 #   -r            随 launch 打开 RViz2
-#   -a "CMD"      AI 速度节点的启动命令; 缺省使用零速度测试发布器
+#   -a "CMD"      自定义 AI_IMU 诊断命令
 #   -h            显示帮助
 
 set -u
@@ -25,13 +26,14 @@ GESTELT_PANE="$SESSION:0.1"
 AI_PANE="$SESSION:0.2"
 OPS_PANE="$SESSION:0.3"
 
-SCENARIO="empty_map"
+SCENARIO="rmuc2025"
 AUTO_MISSION="false"
+HOVER_ONLY="true"
 USE_RVIZ="false"
 AI_CMD=""
 
 usage() {
-    sed -n '5,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '5,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 wait_for_text() {
@@ -50,22 +52,12 @@ wait_for_text() {
     return 1
 }
 
-wait_process_gone() {
-    local pattern="$1" timeout_s="$2"
-    local waited=0
-    while [ "$waited" -lt "$timeout_s" ]; do
-        if ! pgrep -f "$pattern" >/dev/null 2>&1; then
-            return 0
-        fi
-        sleep 1
-        waited=$((waited + 1))
-    done
-    echo "[!] 超时: 进程仍存在: $pattern" >&2
-    return 1
-}
-
 px4_make_cmd() {
-    echo "cd $PX4_DIR && export GAZEBO_IP=127.0.0.1 && export GAZEBO_MASTER_URI=http://127.0.0.1:11345 && make px4_sitl gazebo-classic_iris_vision"
+    local world_setup=""
+    if [ "$SCENARIO" = "rmuc2025" ]; then
+        world_setup="export PX4_SITL_WORLD=$WS_DIR/gestelt_bringup/simulation/worlds/rmuc2025.world && export GAZEBO_MODEL_PATH=$WS_DIR/gestelt_bringup/simulation/models && export PX4_GUI_LOCK_MODELS=rmuc2025_field,rmuc2025_ground && "
+    fi
+    echo "cd $PX4_DIR && export GAZEBO_IP=127.0.0.1 && export GAZEBO_MASTER_URI=http://127.0.0.1:11345 && ${world_setup}make px4_sitl gazebo-classic_raynor"
 }
 
 stop_session() {
@@ -83,10 +75,11 @@ stop_session() {
     echo "[*] 如 gzserver 仍未退出, 请检查: pgrep -f 'gzserver|px4_sitl_default'"
 }
 
-while getopts "s:mra:h" flag; do
+while getopts "s:mHra:h" flag; do
     case "${flag}" in
         s) SCENARIO=${OPTARG} ;;
-        m) AUTO_MISSION="true" ;;
+        m) AUTO_MISSION="true"; HOVER_ONLY="false" ;;
+        H) HOVER_ONLY="true"; AUTO_MISSION="false" ;;
         r) USE_RVIZ="true" ;;
         a) AI_CMD=${OPTARG} ;;
         h) usage; exit 0 ;;
@@ -129,13 +122,12 @@ fi
 if [ -n "$AI_CMD" ]; then
     AI_FULL_CMD="cd $WS_DIR && source /opt/ros/humble/setup.bash && source install/setup.bash && sleep 8 && $AI_CMD"
 else
-    AI_FULL_CMD="cd $WS_DIR && source /opt/ros/humble/setup.bash && source install/setup.bash && sleep 8 && ros2 topic pub -r 50 /drone0/ai_imu/velocity geometry_msgs/msg/Vector3Stamped '{header: {frame_id: drone0_base_link}, vector: {x: 0.0, y: 0.0, z: 0.0}}'"
-    echo "[!] 未提供 -a AI 速度命令, 使用零速度测试发布器 (仅供链路验证, 不代表真实 AI 速度)"
+    AI_FULL_CMD=""
 fi
 
-GESTELT_CMD="cd $WS_DIR && source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 launch gestelt_bringup scenario_ros2.launch.py scenario:=$SCENARIO run_mission:=$AUTO_MISSION use_rviz:=$USE_RVIZ use_gazebo:=false use_fake_drone:=false use_mavros:=true use_ai_velocity:=true ai_velocity_topic:=ai_imu/velocity ai_velocity_variance:=0.04 enforce_gps_off:=true mavros_fcu_url:=udp://:14540@127.0.0.1:14580"
+GESTELT_CMD="cd $WS_DIR && source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 launch gestelt_bringup scenario_ros2.launch.py scenario:=$SCENARIO back_end_planner:=ego use_entire_pcd_map:=true use_fake_sensor:=false run_mission:=false use_rviz:=$USE_RVIZ use_gazebo:=false use_fake_drone:=false use_mavros:=true use_ai_imu:=true use_ai_imu_comparison:=false use_ai_imu_velocity:=false use_gazebo_vio_bridge:=false ai_imu_axis_mapping:=x,y,z ai_imu_accel_correction_blend:=1.0 ai_imu_gyro_correction_blend:=0.0 enforce_gps_off:=true mavros_fcu_url:=udp://:14540@127.0.0.1:14580"
 
-OPS_CMD="bash $SCRIPT_DIR/vio_ai_ops.sh $SCENARIO $AUTO_MISSION $SESSION ${AI_PANE#*:} \"$AI_FULL_CMD\""
+OPS_CMD="bash $SCRIPT_DIR/vio_ai_ops.sh $SCENARIO $AUTO_MISSION $SESSION ${AI_PANE#*:} \"$AI_FULL_CMD\" $HOVER_ONLY"
 
 echo "[*] 创建 tmux 会话 $SESSION (2x2 布局)"
 tmux new-session -d -s "$SESSION"
@@ -143,7 +135,7 @@ tmux split-window -t "$SESSION:0.0" -v
 tmux split-window -t "$SESSION:0.1" -h
 tmux split-window -t "$SESSION:0.0" -h
 
-echo "[*] 窗格 0 (PX4 + Gazebo iris_vision) 启动"
+echo "[*] 窗格 0 (PX4 + Gazebo Raynor) 启动"
 tmux send-keys -t "$PX4_PANE" "$(px4_make_cmd)" C-m
 tmux send-keys -t "$GESTELT_PANE" "$GESTELT_CMD" C-m
 
@@ -152,36 +144,35 @@ if ! wait_for_text "$PX4_PANE" "Ready for takeoff" 900 "PX4 首次启动"; then
     exit 1
 fi
 
-echo "[*] 设置 EKF2 参数 (EV_CTRL=7, GPS_CTRL=0, HGT_REF=0) 并保存"
+echo "[*] 确认 EKF2 参数 (EV_CTRL=7, GPS_CTRL=0, HGT_REF=0)"
+# install_raynor_sitl.sh has already written these values into parameters.bson,
+# so the first PX4 start has loaded them. Avoid restarting PX4 from inside a
+# tmux pane: if pxh is still alive, the restart command is interpreted by PX4.
 tmux send-keys -t "$PX4_PANE" "param set EKF2_EV_CTRL 7" C-m
 tmux send-keys -t "$PX4_PANE" "param set EKF2_GPS_CTRL 0" C-m
 tmux send-keys -t "$PX4_PANE" "param set EKF2_HGT_REF 0" C-m
 tmux send-keys -t "$PX4_PANE" "param save" C-m
 sleep 2
 
-echo "[*] 重启 PX4 使 EKF2_HGT_REF 生效"
-tmux send-keys -t "$PX4_PANE" C-c
-wait_process_gone "px4_sitl_default/bin/px4" 30 || true
-wait_process_gone "gzserver" 30 || true
-sleep 2
-
-tmux send-keys -t "$PX4_PANE" "$(px4_make_cmd)" C-m
-if ! wait_for_text "$PX4_PANE" "Ready for takeoff" 300 "PX4 参数重启"; then
-    echo "[!] PX4 重启失败, 请打开会话检查日志: tmux attach -t $SESSION" >&2
-    exit 1
-fi
-
 echo "[*] 开启故障注入开关 (SYS_FAILURE_EN=1)"
 tmux send-keys -t "$PX4_PANE" "param set SYS_FAILURE_EN 1" C-m
 
-echo "[*] 窗格 2 (AI 速度) 启动"
-tmux send-keys -t "$AI_PANE" "$AI_FULL_CMD" C-m
-echo "[*] 窗格 3 (任务 + 实验操作菜单) 启动"
+echo "[*] 窗格 2 仅供 AI_IMU 诊断；速度接管已禁用"
+if [ "$HOVER_ONLY" = "true" ]; then
+    echo "[*] 窗格 3 (悬停测试 + 实验操作菜单) 启动"
+else
+    echo "[*] 窗格 3 (任务 + 实验操作菜单) 启动"
+fi
 tmux send-keys -t "$OPS_PANE" "$OPS_CMD" C-m
 
 echo
 echo "[*] 启动完成, 即将进入会话"
-echo "[*] 窗格布局: 左上 PX4 | 右上 任务/操作菜单 | 左下 Gestelt+MAVROS | 右下 AI 速度"
+echo "[*] 窗格布局: 左上 PX4 | 右上 测试/操作菜单 | 左下 Gestelt+MAVROS | 右下 AI 诊断"
+if [ "$HOVER_ONLY" = "true" ]; then
+    echo "[*] 自动化模式: 仅起飞和 HOVER，不发送 EGO 导航目标"
+else
+    echo "[*] 自动化模式: 起飞、MISSION 导航 + RMUC 2025 目标"
+fi
 echo "[*] 预飞检查务必确认 GPS guard 打印 'GPS disabled: EKF2_GPS_CTRL=0 and HIL_GPS blocked'"
 echo
 tmux attach-session -t "$SESSION"

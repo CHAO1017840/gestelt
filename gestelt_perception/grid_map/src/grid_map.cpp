@@ -14,31 +14,45 @@ void GridMap::initMapROS(ros::NodeHandle &nh, ros::NodeHandle &pnh)
       "odom", 1, &GridMap::odomColCheckCB, this);
     // Publisher for collision visualizations
     collision_viz_pub_ = nh.advertise<visualization_msgs::Marker>("grid_map/collision_viz", 10);
-    check_collisions_timer_ = 
-      nh.createTimer(ros::Duration(0.025), &GridMap::checkCollisionsTimerCB, this);
     pnh.param("grid_map/collision_check/warn_radius", col_warn_radius_, -1.0); // 0.25
     pnh.param("grid_map/collision_check/fatal_radius", col_fatal_radius_, -1.0); // 0.126
   }
 
   if (dbg_input_entire_map_){
     ROS_INFO("[%s] DEBUG: INPUT ENTIRE MAP", node_name_.c_str());
-    
-    // Wait for entire point cloud map
-		sensor_msgs::PointCloud2 pc_msg;
-		try {	
-      ROS_ERROR("[%s] Waiting for point cloud on topic %s", node_name_.c_str(), entire_pcd_map_topic_.c_str());
-			pc_msg = *(ros::topic::waitForMessage<sensor_msgs::PointCloud2>(entire_pcd_map_topic_, ros::Duration(10)));
-		}
-		catch (...)
-		{
-			ROS_ERROR("[%s] No point cloud topic %s received. Shutting down.", node_name_.c_str(), entire_pcd_map_topic_.c_str());
-			ros::shutdown();
-		}
-    pcdMsgToMap(pc_msg);
+
+    if (!entire_pcd_map_file_.empty()) {
+      pcl::PointCloud<pcl::PointXYZ>::Ptr pcd(
+        new pcl::PointCloud<pcl::PointXYZ>());
+      if (pcl::io::loadPCDFile<pcl::PointXYZ>(
+          entire_pcd_map_file_, *pcd) == -1) {
+        ROS_ERROR("[%s] Failed to load PCD file %s. Shutting down.",
+          node_name_.c_str(), entire_pcd_map_file_.c_str());
+        ros::shutdown();
+      }
+      ROS_INFO("[%s] Loaded %zu points from %s",
+        node_name_.c_str(), pcd->points.size(), entire_pcd_map_file_.c_str());
+      pcdToMap(pcd);
+
+    } else {
+      // Fallback for callers that provide the complete map over a topic.
+      sensor_msgs::PointCloud2 pc_msg;
+      try {
+        ROS_ERROR("[%s] Waiting for point cloud on topic %s",
+          node_name_.c_str(), entire_pcd_map_topic_.c_str());
+        pc_msg = *(ros::topic::waitForMessage<sensor_msgs::PointCloud2>(
+          entire_pcd_map_topic_, ros::Duration(entire_pcd_map_timeout_)));
+      }
+      catch (...) {
+        ROS_ERROR("[%s] No point cloud topic %s received. Shutting down.",
+          node_name_.c_str(), entire_pcd_map_topic_.c_str());
+        ros::shutdown();
+      }
+      pcdMsgToMap(pc_msg);
+    }
 
     occ_map_pub_ = nh.advertise<sensor_msgs::PointCloud2>("grid_map/occupancy", 10);
     local_map_poly_pub_ = nh.advertise<geometry_msgs::PolygonStamped>("local_map/bounds", 5);
-    update_local_map_timer_ = nh.createTimer(ros::Duration(1.0/update_local_map_freq_), &GridMap::updateLocalMapTimerCB, this);
 
     return;
   }
@@ -53,6 +67,10 @@ void GridMap::initMapROS(ros::NodeHandle &nh, ros::NodeHandle &pnh)
   /* Initialize ROS Timers */
   // vis_occ_timer_ = nh.createTimer(ros::Duration(1.0/viz_occ_map_freq_), &GridMap::visTimerCB, this);
   update_local_map_timer_ = nh.createTimer(ros::Duration(1.0/update_local_map_freq_), &GridMap::updateLocalMapTimerCB, this);
+  if (check_collisions_) {
+    check_collisions_timer_ =
+      nh.createTimer(ros::Duration(0.025), &GridMap::checkCollisionsTimerCB, this);
+  }
   // build_kd_tree_timer_ = nh.createTimer(ros::Duration(1.0/build_kd_tree_freq_), &GridMap::buildKDTreeTimerCB, this);
 
   // ROS_INFO("[%s] Map origin (%f, %f, %f)", node_name_.c_str(), 
@@ -115,6 +133,8 @@ void GridMap::readROSParams(ros::NodeHandle &nh, ros::NodeHandle &pnh)
   /* Map parameters */
   pnh.param("grid_map/debug_input_entire_map", dbg_input_entire_map_, false);
   pnh.param("grid_map/entire_pcd_map_topic", entire_pcd_map_topic_, std::string("/fake_map"));
+  pnh.param("grid_map/entire_pcd_map_file", entire_pcd_map_file_, std::string(""));
+  pnh.param("grid_map/entire_pcd_map_timeout", entire_pcd_map_timeout_, 60.0);
 
   pnh.param("grid_map/print_timers", print_timers_, false);
 
@@ -175,6 +195,9 @@ void GridMap::reset(const double& resolution){
   global_map_in_origin_.reset(new pcl::PointCloud<pcl::PointXYZ>());
 
   md_.last_sensor_msg_time = ros::Time::now().toSec();
+  md_.has_pose_ = false;
+  md_.cam2origin_.setIdentity();
+  md_.body2origin_.setIdentity();
 
   // Camera to body transform
   md_.cam2body_.block<3, 3>(0, 0) =  (Eigen::AngleAxisd((M_PI/180.0) * md_.cam2body_rpy_deg(2), Eigen::Vector3d::UnitZ())
@@ -465,7 +488,20 @@ void GridMap::pcdToMap(pcl::PointCloud<pcl::PointXYZ>::Ptr pcd)
   const pcl::PointXYZ sensor_origin(md_.cam2origin_(0, 3), md_.cam2origin_(1, 3), md_.cam2origin_(2, 3));
 
   // tm_bonxai_insert_.start();
-  bonxai_map_->insertPointCloud(global_map_in_origin_->points, sensor_origin, mp_.max_range);
+  if (dbg_input_entire_map_) {
+    // A static occupancy map is already measured in the map frame. Mark the
+    // observed cells directly instead of creating degenerate rays from the
+    // map origin.
+    for (const auto &point : global_map_in_origin_->points) {
+      if (pcl::isFinite(point)) {
+        bonxai_map_->addHitPoint(
+          Eigen::Vector3d(point.x, point.y, point.z));
+      }
+    }
+  } else {
+    bonxai_map_->insertPointCloud(
+      global_map_in_origin_->points, sensor_origin, mp_.max_range);
+  }
   // tm_bonxai_insert_.stop(false);
 
   if (dbg_input_entire_map_){

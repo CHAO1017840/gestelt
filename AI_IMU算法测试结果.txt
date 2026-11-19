@@ -1,0 +1,292 @@
+AI_IMU 修正算法测试结果
+=======================
+测试日期：2026-11-10
+环境：PX4 v1.14 SITL + Gazebo Classic + Raynor
+
+
+一、测试目标
+------------
+验证 ONNX 输出的修正角速度和修正加速度能否作为速度积分的输入，
+而不是要求飞机保持稳定飞行。
+
+测试关注：
+  1. 原始 IMU 积分结果
+  2. AI 修正 IMU 积分结果
+  3. 积分姿态是否与 PX4 姿态一致
+  4. AI 速度作为 EKF 外部速度后是否能够保持短时有效
+
+
+二、历史接管测试配置
+----------------
+以下记录的是旧的 50 Hz MAVLink + 200 Hz 插值链路。
+该链路已经停止作为算法结论来源，当前复测必须先执行
+VIO 正常下的 250 Hz 原生 IMU 旁路比较。
+
+速度节点输入：
+
+  ai_imu_velocity_input_topic:=mavros/ai/imu_corrected
+
+这是完整 AI_IMU 算法路径：
+
+  raw IMU
+    -> ONNX correction
+    -> /mavros/ai/imu_corrected
+    -> strapdown integration
+    -> /mavros/odometry/out
+    -> MAVROS ODOMETRY
+    -> PX4 EKF2
+
+AI_IMU 推理窗口：
+
+  target_imu_hz=200
+  inference_stride=5
+
+实际修正 IMU 输出约为 40 Hz。
+
+
+三、当前旁路对照测试方法
+--------------------
+飞机在 VIO 模式下稳定悬停后，不向 PX4 发布积分结果，
+只在测试进程内并行运行两个相同的积分器：
+
+  积分器 A：原始 /mavros/imu/data_raw
+  积分器 B：修正 /mavros/ai/imu_corrected
+
+两个积分器使用同一 PX4 位置、速度和姿态初始化，
+运行 10 秒后与 PX4 当前速度比较。
+
+这个方法只测试 IMU 积分和模型修正，不改变飞控状态。
+
+当前启动参数：
+
+  use_ai_imu_comparison:=true
+  use_ai_imu_velocity:=false
+  ai_imu_interpolate:=true
+  ai_imu_inference_stride:=5
+  ai_imu_axis_mapping:=x,y,z
+
+PX4 参数：
+
+  EKF2_EV_CTRL=4
+  EKF2_HGT_REF=0
+
+PX4 原生 IMU 为 250 Hz。Raynor .post 脚本把 offboard MAVLink 的
+HIGHRES_IMU 设置为 250 Hz，客户端再重采样到模型要求的 200 Hz。
+比较节点要求原始 IMU 不低于 180 Hz、修正 IMU 不低于 25 Hz，
+并且从不发布 /mavros/odometry/out。
+
+悬停后执行：
+
+  ros2 service call \
+    /drone0/ai_imu_comparison/start_comparison \
+    std_srvs/srv/Trigger "{}"
+
+输出：
+
+  /drone0/ai_imu/comparison/raw_velocity
+  /drone0/ai_imu/comparison/corrected_velocity
+
+
+四、旧链路测试结果
+------------
+PX4 悬停速度接近：
+
+  [0.009, 0.007, -0.0003] m/s
+
+原始 IMU 积分 10 秒后：
+
+  world velocity = [-0.144, 0.017, 0.025] m/s
+
+AI 修正 IMU 积分 10 秒后：
+
+  world velocity = [11.637, 38.474, -12.301] m/s
+
+原始 IMU 积分误差约为 0.15 m/s。
+修正 IMU 积分在相同时间内达到几十 m/s，并伴随积分姿态明显偏离 PX4。
+
+结论：
+
+  当前问题主要来自 AI 修正后的角速度/加速度动态输出，
+  不是积分器对原始 IMU 的静态重力补偿。
+
+
+五、完整 AI_IMU 接管测试
+------------------------
+测试模式：
+
+  先使用 VIO 起飞
+  AI 速度节点从校准完成起保持待命
+  在空中启用 AI 导航并关闭 VIO
+
+观察结果：
+
+  1. AI 接管命令能够成功执行。
+  2. /mavros/odometry/out 能持续发布。
+  3. AI 速度在接管前数秒较小，随后快速增大。
+  4. EKF 开始跟随错误速度，位置逐渐超出地图边界。
+  5. 随后可能出现姿态失败或 blind land。
+
+在一次带接管前校验的测试中：
+
+  AI 与健康 PX4 速度的误差在约 7 秒后超过 0.5 m/s
+  接管保护自动中止
+  VIO 保持开启
+  飞机继续保持悬停
+
+
+六、复现算法比较
+----------------
+注意：
+
+  以下第一阶段只做比较，不关闭 VIO，也不向飞控发布 AI 速度。
+
+终端 1，启动 PX4：
+
+  cd /home/cjc/ws_capstone/PX4-Autopilot
+  export GAZEBO_IP=127.0.0.1
+  export GAZEBO_MASTER_URI=http://127.0.0.1:11345
+  HEADLESS=1 make px4_sitl gazebo-classic_raynor
+
+终端 2，启动 Gestelt、MAVROS 和并行比较节点：
+
+  source /opt/ros/humble/setup.bash
+  cd /home/cjc/ws_capstone/gestelt
+  source install/setup.bash
+
+  ros2 launch gestelt_bringup scenario_ros2.launch.py \
+    scenario:=empty_map \
+    run_mission:=false \
+    use_rviz:=false \
+    use_gazebo:=false \
+    use_fake_drone:=false \
+    use_mavros:=true \
+    use_ai_imu:=true \
+    use_ai_imu_comparison:=true \
+    use_ai_imu_velocity:=false \
+    ai_imu_axis_mapping:=x,y,z \
+    enforce_gps_off:=true
+
+等待：
+
+  raw IMU calibration complete
+  corrected IMU calibration complete
+
+确认原始 IMU 约 230~240 Hz、修正 IMU 约 40 Hz：
+
+  ros2 topic hz /drone0/mavros/imu/data_raw
+  ros2 topic hz /drone0/mavros/ai/imu_corrected
+
+终端 3，使用 VIO 起飞并悬停：
+
+  source /opt/ros/humble/setup.bash
+  cd /home/cjc/ws_capstone/gestelt
+  source install/setup.bash
+
+  ros2 topic pub --once /drone0/traj_server/command \
+    gestelt_msgs/msg/Command "{command: 0}"
+
+等待轨迹服务器日志：
+
+  Take off complete
+  Transitioning server state: TAKEOFF -> HOVER
+
+执行并行比较：
+
+  ros2 service call \
+    /drone0/ai_imu_comparison/start_comparison \
+    std_srvs/srv/Trigger "{}"
+
+同时监控：
+
+  ros2 topic echo /drone0/ai_imu/comparison/raw_velocity
+  ros2 topic echo /drone0/ai_imu/comparison/corrected_velocity
+
+PX4 pxh> 中检查：
+
+  listener estimator_status_flags -n 1
+  listener vehicle_local_position -n 1
+
+此阶段不执行 failure vio off，不需要重启 PX4。
+
+只有比较通过后，才单独启动 use_ai_imu_velocity 做接管测试。
+
+
+七、后续算法检查重点
+--------------------
+1. 修正角速度的 x/y/z 方向和符号。
+2. 修正加速度的 x/y/z 方向和符号。
+3. 模型输入是否要求 m/s^2、g 或其他单位。
+4. MAVROS FLU 到模型 [z, -y, x] 的映射是否正确。
+5. 动态窗口下 corr_acc 和 corr_gyro 是否出现异常大幅修正。
+6. 模型输出是否只在特定窗口长度或采样率下有效。
+7. 使用真实设备日志与 SITL 日志分别验证模型。
+
+
+八、输入轴映射测试参数
+----------------------
+当前 ROS 2 场景支持显式字符串轴映射：
+
+  ai_imu_axis_mapping:="z,-y,x"
+
+候选映射：
+
+  z,-y,x
+    当前 Radxa 测试映射。模型 XYZ = ROS FLU 的 Z, -Y, X。
+
+  x,y,z
+    不改变轴。模型直接接收 MAVROS FLU XYZ。
+
+  x,-y,-z
+    ROS FLU 转 FRD，常用于前、右、下机体系。
+
+ONNX 模型本身不含轴标签或训练坐标元数据，因此必须结合训练代码或
+六面静态/单轴旋转测试确认，不能仅凭模型文件判断。
+
+在模型修正链路通过静态、动态和坐标轴测试前，
+AI_IMU 只能作为实验数据源，不能视为可靠的 VIO 替代。
+
+
+九、原生高频链路首次验证
+------------------------
+验证日期：2026-11-10
+
+PX4 参数：
+
+  EKF2_EV_CTRL=4
+  EKF2_HGT_REF=0
+  EKF2_GPS_CTRL=0
+
+MAVLink：
+
+  HIGHRES_IMU 配置为 250 Hz。
+
+实际频率：
+
+  /mavros/imu/data_raw        约 238 Hz
+  模型重采样输入              约 200 Hz
+  /mavros/ai/imu_corrected    约 40 Hz
+
+推理进程使用单线程 ONNX Runtime，CPU 从约 130% 降到约 19%。
+
+VIO 正常悬停，比较节点不向 /mavros/odometry/out 发布数据。
+10 秒比较结果：
+
+  PX4  world velocity = [0.008, -0.006, -0.002] m/s
+  raw  world velocity = [1.589, 0.834, -0.058] m/s
+  AI   world velocity = [2.461, 0.446, -0.022] m/s
+
+  raw error             = 1.791 m/s
+  corrected error       = 2.494 m/s
+  corrected vs raw      = 0.955 m/s
+  max raw gap           = 本次旧统计因 header 时间戳为零而无效
+  max corrected gap     = 本次旧统计因 header 时间戳为零而无效
+
+结论：
+
+  1. 原生高频输入、VIO 旁路比较和 PX4 状态隔离已经生效。
+  2. 当前模型修正没有改善积分速度，反而增大了速度误差。
+  3. 原始 IMU 也存在持续漂移，说明比较前仍需检查
+     加速度零偏/比例、FLU 轴定义和重力补偿。
+  4. 不应根据这一结果直接调整 EKF innovation gate。
+  5. 比较节点已改为和积分器使用相同的系统时钟回退，
+     下一轮需要重新记录真实的 IMU 最大时间间隔。

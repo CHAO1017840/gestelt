@@ -5,6 +5,7 @@
 
 #include <pcl/point_cloud.h>
 #include <pcl/common/transforms.h>
+#include <pcl/io/pcd_io.h>
 #include <pcl_conversions/pcl_conversions.h>
 // #include <pcl/filters/voxel_grid.h>
 // #include <pcl/filters/passthrough.h>
@@ -314,6 +315,8 @@ private:
   /* Params */
   bool dbg_input_entire_map_; // flag to indicate that map will be constructed at the start from the entire pcd map (instead of through incremental sensor data)
   std::string entire_pcd_map_topic_; // Topic to listen for an entire PCD for debugging
+  std::string entire_pcd_map_file_; // Optional direct PCD path for static maps
+  double entire_pcd_map_timeout_{60.0}; // Timeout for the first complete PCD map
 
   bool print_timers_{false};
 

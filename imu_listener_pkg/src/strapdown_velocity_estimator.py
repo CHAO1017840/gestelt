@@ -101,11 +101,24 @@ class StrapdownVelocityEstimator:
         self.previous_accel_world: Optional[np.ndarray] = None
         self.previous_stamp: Optional[float] = None
         self.gyro_bias = np.zeros(3, dtype=np.float64)
-        self.gravity_bias_world = np.zeros(3, dtype=np.float64)
+        self.accel_bias_body = np.zeros(3, dtype=np.float64)
+        self.accel_bias_world = np.zeros(3, dtype=np.float64)
+        self.last_accel_world_observed: Optional[np.ndarray] = None
         self.initialization_count = 0
         self.initialized = self.initialization_samples == 0
         self._initial_accel_sum = np.zeros(3, dtype=np.float64)
         self._initial_gyro_sum = np.zeros(3, dtype=np.float64)
+
+    def set_orientation(self, orientation: np.ndarray):
+        """Use a trusted attitude without resetting velocity state."""
+        orientation = _normalize_quaternion(
+            np.asarray(orientation, dtype=np.float64).reshape(4)
+        )
+        if not np.isfinite(orientation).all():
+            raise ValueError("orientation must be finite")
+        if np.dot(orientation, self.orientation) < 0.0:
+            orientation = -orientation
+        self.orientation = orientation
 
     def set_state_from_body_velocity(
         self,
@@ -169,6 +182,24 @@ class StrapdownVelocityEstimator:
             [-1.0, -1.0, -1.0, 1.0]
         )
         return _rotate_with_quaternion(world_velocity, conjugate)
+
+    def body_to_world_velocity(
+        self, body_velocity: np.ndarray
+    ) -> np.ndarray:
+        """Rotate a body-frame vector into the world frame."""
+        body_velocity = np.asarray(
+            body_velocity, dtype=np.float64
+        ).reshape(3)
+        return _rotate_with_quaternion(
+            body_velocity, self.orientation
+        )
+
+    def set_world_accel_bias(self, bias: np.ndarray):
+        """Set the world-frame acceleration residual correction."""
+        bias = np.asarray(bias, dtype=np.float64).reshape(3)
+        if not np.isfinite(bias).all():
+            raise ValueError("world acceleration bias must be finite")
+        self.accel_bias_world = bias
 
     def world_to_body_covariance(
         self, world_covariance: np.ndarray
@@ -255,9 +286,11 @@ class StrapdownVelocityEstimator:
                 count = self.initialization_count
                 mean_accel = self._initial_accel_sum / count
                 self.gyro_bias = self._initial_gyro_sum / count
-                self.gravity_bias_world = (
-                    mean_accel
-                    - np.array([0.0, 0.0, self.gravity])
+                gravity_body = self.world_to_body_velocity(
+                    np.array([0.0, 0.0, self.gravity])
+                )
+                self.accel_bias_body = (
+                    mean_accel - gravity_body
                 )
                 self.initialized = True
                 self.previous_stamp = float(stamp_s)
@@ -268,7 +301,16 @@ class StrapdownVelocityEstimator:
             self.previous_stamp = float(stamp_s)
             self.previous_accel_world = (
                 _rotate_with_quaternion(
-                    acceleration, self.orientation
+                    acceleration - self.accel_bias_body,
+                    self.orientation,
+                )
+                - np.array([0.0, 0.0, self.gravity])
+                - self.accel_bias_world
+            )
+            self.last_accel_world_observed = (
+                _rotate_with_quaternion(
+                    acceleration - self.accel_bias_body,
+                    self.orientation,
                 )
                 - np.array([0.0, 0.0, self.gravity])
             )
@@ -285,10 +327,13 @@ class StrapdownVelocityEstimator:
         self._integrate_orientation(
             angular_velocity - self.gyro_bias, dt
         )
-        accel_world = _rotate_with_quaternion(
-            acceleration, self.orientation
-        ) - np.array([0.0, 0.0, self.gravity]) - (
-            self.gravity_bias_world
+        observed_accel_world = _rotate_with_quaternion(
+            acceleration - self.accel_bias_body,
+            self.orientation,
+        ) - np.array([0.0, 0.0, self.gravity])
+        self.last_accel_world_observed = observed_accel_world.copy()
+        accel_world = (
+            observed_accel_world - self.accel_bias_world
         )
 
         if self.previous_accel_world is not None:

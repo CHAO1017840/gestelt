@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<sdf version="1.7">
+  <model name="rmuc2025_field">
+    <static>true</static>
+    <link name="field">
+      <collision name="field_collision">
+        <geometry>
+          <mesh>
+            <uri>model://rmuc2025_field/meshes/RMUC2025_national.stl</uri>
+            <scale>1 1 1</scale>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name="field_visual">
+        <geometry>
+          <mesh>
+            <uri>model://rmuc2025_field/meshes/RMUC2025_national.stl</uri>
+            <scale>1 1 1</scale>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.72 0.74 0.70 1</ambient>
+          <diffuse>0.82 0.84 0.78 1</diffuse>
+          <specular>0.08 0.08 0.08 1</specular>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

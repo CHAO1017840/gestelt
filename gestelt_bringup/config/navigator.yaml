@@ -91,6 +91,9 @@ sfc:
 ##### Back-end 
 back_end: 
   num_replan_retries: 1 # Number of times for back-end to retry
+  failure_backoff_initial: 0.5 # [s] Delay after the first failed plan
+  failure_backoff_max: 2.0 # [s] Maximum delay while planning keeps failing
+  failure_backoff_multiplier: 2.0 # Exponential retry delay multiplier
   ego:
     segment_length: 1.0 # Length of one segment i.e. distance between adjacent spline control points
 
@@ -134,11 +137,12 @@ optimization:
 ##### Mapping params
 grid_map:
   print_timers: false
-  sensor_timeout: 3.0                  # [s] Tolerate bursty PCD-backed fake sensors
+  sensor_timeout: 8.0                  # [s] Tolerate bursty PCD-backed fake sensors
+  entire_pcd_map_timeout: 60.0         # [s] Wait for the initial complete PCD
 
   global_map:
     size_x: 50.0
-    size_y: 50.0
+    size_y: 60.0
     size_z: 20.0
   local_map:      #local_map parameters must consider the "receding_horizon_planning_dist"!
     size_x: 17.5

@@ -4,6 +4,7 @@ project(imu_listener_pkg)
 find_package(ament_cmake REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(mavros_msgs REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -12,6 +13,7 @@ find_package(ai_msgs REQUIRED)
 
 install(PROGRAMS
   src/ai_imu_client.py
+  src/ai_imu_comparison.py
   src/ai_imu_velocity.py
   DESTINATION lib/${PROJECT_NAME}
 )
@@ -49,6 +51,7 @@ endif()
 
 ament_export_dependencies(
   geometry_msgs
+  mavros_msgs
   nav_msgs
   rclpy
   sensor_msgs

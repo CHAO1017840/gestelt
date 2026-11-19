@@ -6,8 +6,54 @@ Use the ROS 2 launch entry point from the workspace root:
 
 ```bash
 ros2 launch gestelt_bringup scenario_ros2.launch.py \
-  scenario:=empty_map run_mission:=true use_rviz:=false
+  scenario:=rmuc2025 back_end_planner:=ego \
+  run_mission:=true use_rviz:=false
 ```
+
+The unified `vio_ai_experiment.sh` launcher defaults to takeoff and HOVER only.
+It does not publish navigation goals, so EGO planning is not started:
+
+```bash
+gestelt_bringup/scripts/vio_ai_experiment.sh
+```
+
+The complete hover stack can also be started from one ROS 2 launch file:
+
+```bash
+ros2 launch gestelt_bringup rmuc2025_hover.launch.py
+```
+
+This starts PX4 SITL, Gazebo, MAVROS, AI_IMU, RMUC navigation, automatic
+takeoff/HOVER and the terminal status monitor.
+
+Use `-m` for automatic mission startup, or `-H` to explicitly select the
+hover-only mode.
+
+After HOVER is reached, the ops pane prints one status panel per second:
+
+- PX4 armed/mode/connection and `failsafe_flags`
+- VIO fusion flags and dead-reckoning state from
+  `estimator_status_flags`/`vehicle_local_position`
+- raw IMU and AI-corrected IMU rates, topic age and clipping counts
+
+## RMUC 2025 map
+
+The physical STL field is the boundary authority for both Gazebo and the EGO
+Planner map. Regenerate the cropped navigation PCD after replacing the source
+point cloud or STL:
+
+```bash
+gestelt_bringup/scripts/prepare_rmuc2025_map.py
+```
+
+The current map size is `15.036 x 28.036 m`. Gazebo translates the field and PCD
+by `(x=3, y=-12) m`, so the prepared PCD bounds are
+`x=[-4.518, 10.518]`, `y=[-26.018, 2.018]`. The RMUC field and ground models are
+read-only in the Gazebo GUI; the mouse can still orbit, pan and zoom the camera.
+
+`install_raynor_sitl.sh` also applies the versioned PX4 validity-hold and Gazebo
+GUI model-lock patches from `scripts/patches`. Reapplying the installer is
+idempotent.
 
 The XML launch files below are retained as ROS 1 reference material. The ROS 2
 launch file dynamically creates namespaced nodes for every drone.

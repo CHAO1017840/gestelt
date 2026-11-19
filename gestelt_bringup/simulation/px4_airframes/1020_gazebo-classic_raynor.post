@@ -1,0 +1,5 @@
+# PX4's simulator publishes IMU data at 250 Hz. Request the original 250 Hz
+# rate on the offboard MAVLink link, then resample real samples to the AirIMU
+# model rate of 200 Hz.
+# shellcheck disable=SC2154
+mavlink stream -r 250 -s HIGHRES_IMU -u $udp_offboard_port_local

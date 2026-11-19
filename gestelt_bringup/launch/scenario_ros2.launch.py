@@ -33,6 +33,7 @@ SCENARIO_DRONES = {
     "forest8_50obs": 8,
     "forest10_50obs": 10,
     "forest16_50obs": 16,
+    "rmuc2025": 1,
     "vicon_empty1": 1,
     "vicon_empty3": 3,
     "vicon_obs3": 3,
@@ -100,6 +101,21 @@ def launch_setup(context, *args, **kwargs):
     drone_params = load_flat_params(os.path.join(share, "config", "fake_drone_params.yaml"))
     sensor_params = load_flat_params(os.path.join(share, "config", "fake_sensor_params.yaml"))
     nav_params = load_flat_params(os.path.join(share, "config", "navigator.yaml"))
+    back_end_planner = context.launch_configurations.get(
+        "back_end_planner", "ego"
+    ).strip().lower()
+    back_end_types = {
+        "ssfc": 0,
+        "ego": 1,
+        "poly": 2,
+    }
+    if back_end_planner not in back_end_types:
+        raise RuntimeError(
+            "back_end_planner must be one of: ego, ssfc, poly"
+        )
+    nav_params["back_end/planner_type"] = back_end_types[
+        back_end_planner
+    ]
     adaptor_params = load_flat_params(
         os.path.join(share, "config", "planner_adaptor", "minco_adaptor.yaml")
     )
@@ -117,13 +133,34 @@ def launch_setup(context, *args, **kwargs):
         )
         == "true"
     )
-    if use_ai_imu_velocity and not use_ai_imu:
+    use_ai_imu_comparison = (
+        context.launch_configurations.get(
+            "use_ai_imu_comparison", "false"
+        )
+        == "true"
+    )
+    use_entire_pcd_map = (
+        context.launch_configurations.get(
+            "use_entire_pcd_map", "false"
+        )
+        == "true"
+    )
+    if use_ai_imu_velocity or use_ai_imu_comparison:
         raise RuntimeError(
-            "use_ai_imu_velocity requires use_ai_imu:=true"
+            "AI_IMU velocity derivation is disabled. Corrected AI IMU "
+            "must not be integrated into a navigation velocity."
+        )
+    if (use_ai_imu_velocity or use_ai_imu_comparison) and not use_ai_imu:
+        raise RuntimeError(
+            "AI velocity/comparison mode requires use_ai_imu:=true"
         )
     if use_ai_velocity and use_ai_imu_velocity:
         raise RuntimeError(
             "Enable either use_ai_velocity or use_ai_imu_velocity, not both"
+        )
+    if use_ai_imu_comparison and use_ai_imu_velocity:
+        raise RuntimeError(
+            "Use either velocity failover or VIO-parallel comparison"
         )
     mavros_plugins_file = (
         "mavros_px4_gestelt_plugins_ai.yaml"
@@ -162,6 +199,22 @@ def launch_setup(context, *args, **kwargs):
             }],
         ),
         Node(
+            package="gestelt_bringup",
+            executable="gazebo_vio_pose_bridge.py",
+            name="gazebo_vio_pose_bridge",
+            namespace="drone0",
+            output="screen",
+            parameters=[{
+                "model_name": "raynor",
+                "output_topic": "vio/odometry",
+                "frame_id": "map",
+                "child_frame_id": "drone0_base_link",
+            }],
+            condition=IfCondition(
+                LaunchConfiguration("use_gazebo_vio_bridge")
+            ),
+        ),
+        Node(
             package="mavros",
             executable="mavros_node",
             name="mavros",
@@ -196,17 +249,71 @@ def launch_setup(context, *args, **kwargs):
                 "model_path": LaunchConfiguration("ai_imu_model_path"),
                 "buffer_size": LaunchConfiguration("ai_imu_buffer_size"),
                 "target_imu_hz": LaunchConfiguration("ai_imu_target_hz"),
+                "minimum_input_hz": LaunchConfiguration(
+                    "ai_imu_minimum_input_hz"
+                ),
                 "interpolate": LaunchConfiguration(
                     "ai_imu_interpolate"
                 ),
                 "inference_stride": LaunchConfiguration(
                     "ai_imu_inference_stride"
                 ),
+                "inference_threads": LaunchConfiguration(
+                    "ai_imu_inference_threads"
+                ),
                 "remap_mavros_axes": LaunchConfiguration(
                     "ai_imu_remap_mavros_axes"
                 ),
+                "axis_mapping": LaunchConfiguration(
+                    "ai_imu_axis_mapping"
+                ),
+                "max_accel_correction": LaunchConfiguration(
+                    "ai_imu_max_accel_correction"
+                ),
+                "max_gyro_correction": LaunchConfiguration(
+                    "ai_imu_max_gyro_correction"
+                ),
+                "accel_correction_blend": LaunchConfiguration(
+                    "ai_imu_accel_correction_blend"
+                ),
+                "gyro_correction_blend": LaunchConfiguration(
+                    "ai_imu_gyro_correction_blend"
+                ),
             }],
             condition=IfCondition(LaunchConfiguration("use_ai_imu")),
+        ),
+        Node(
+            package="imu_listener_pkg",
+            executable="ai_imu_comparison.py",
+            name="ai_imu_comparison",
+            namespace="drone0",
+            output="screen",
+            parameters=[{
+                "raw_imu_topic": LaunchConfiguration(
+                    "ai_imu_input_topic"
+                ),
+                "corrected_imu_topic": LaunchConfiguration(
+                    "ai_imu_corrected_topic"
+                ),
+                "local_position_topic": "mavros/local_position/odom",
+                "parent_frame": "map",
+                "initialization_samples": LaunchConfiguration(
+                    "ai_imu_comparison_initialization_samples"
+                ),
+                "comparison_duration": LaunchConfiguration(
+                    "ai_imu_comparison_duration"
+                ),
+                "minimum_input_hz": LaunchConfiguration(
+                    "ai_imu_comparison_minimum_input_hz"
+                ),
+                "minimum_corrected_hz": LaunchConfiguration(
+                    "ai_imu_comparison_minimum_corrected_hz"
+                ),
+                "use_px4_attitude": True,
+            }],
+            condition=IfCondition(
+                LaunchConfiguration("use_ai_imu_comparison")
+            ),
         ),
         Node(
             package="imu_listener_pkg",
@@ -216,11 +323,19 @@ def launch_setup(context, *args, **kwargs):
             output="screen",
             parameters=[{
                 "corrected_imu_topic": LaunchConfiguration(
-                    "ai_imu_corrected_topic"
+                    "ai_imu_velocity_input_topic"
                 ),
-                "output_topic": "mavros/odometry/out",
+                "output_topic": LaunchConfiguration(
+                    "ai_imu_velocity_odometry_topic"
+                ),
+                "diagnostic_topic": LaunchConfiguration(
+                    "ai_imu_velocity_diagnostic_topic"
+                ),
                 "velocity_topic": "ai_imu/velocity",
                 "local_position_topic": "mavros/local_position/odom",
+                "vio_orientation_topic": LaunchConfiguration(
+                    "ai_imu_vio_orientation_topic"
+                ),
                 "parent_frame": "map",
                 "child_frame": "drone0_base_link",
                 "start_enabled": LaunchConfiguration(
@@ -234,6 +349,33 @@ def launch_setup(context, *args, **kwargs):
                 ),
                 "initialization_samples": LaunchConfiguration(
                     "ai_imu_velocity_initialization_samples"
+                ),
+                "use_px4_attitude": LaunchConfiguration(
+                    "ai_imu_velocity_use_px4_attitude"
+                ),
+                "freeze_px4_attitude_on_enable": LaunchConfiguration(
+                    "ai_imu_velocity_freeze_attitude"
+                ),
+                "max_velocity_norm": LaunchConfiguration(
+                    "ai_imu_velocity_max_speed"
+                ),
+                "calibrate_world_accel_bias": LaunchConfiguration(
+                    "ai_imu_velocity_calibrate_world_bias"
+                ),
+                "world_accel_bias_time_constant": LaunchConfiguration(
+                    "ai_imu_velocity_world_bias_tau"
+                ),
+                "max_world_accel_bias": LaunchConfiguration(
+                    "ai_imu_velocity_max_world_bias"
+                ),
+                "covariance_inflation": LaunchConfiguration(
+                    "ai_imu_velocity_covariance_inflation"
+                ),
+                "minimum_horizontal_velocity_variance": LaunchConfiguration(
+                    "ai_imu_velocity_minimum_horizontal_variance"
+                ),
+                "minimum_vertical_velocity_variance": LaunchConfiguration(
+                    "ai_imu_velocity_minimum_vertical_variance"
                 ),
             }],
             condition=IfCondition(
@@ -312,7 +454,12 @@ def launch_setup(context, *args, **kwargs):
                     "uav.origin_frame": "map",
                     "uav.sensor_frame": cam_link,
                 }],
-                remappings=[("/uav/sensor_cloud", f"/{ns}/camera/depth/points")],
+                remappings=[
+                    ("/uav/sensor_cloud", f"/{ns}/fake_sensor/cloud")
+                ],
+                condition=IfCondition(
+                    LaunchConfiguration("use_fake_sensor")
+                ),
             ),
             Node(
                 package="navigator",
@@ -330,13 +477,16 @@ def launch_setup(context, *args, **kwargs):
                     "grid_map.cam_frame": cam_link,
                     "grid_map.pose_type": 2,
                     "grid_map.sensor_type": 1,
-                    "grid_map.debug_input_entire_map": False,
+                    "grid_map.debug_input_entire_map":
+                        use_entire_pcd_map,
+                    "grid_map.entire_pcd_map_file":
+                        map_path if use_entire_pcd_map else "",
                     "grid_map.entire_pcd_map_topic": "/fake_map",
                 }],
                 remappings=[
                     ("odom", "mavros/local_position/odom"),
                     ("grid_map/odom", "mavros/local_position/odom"),
-                    ("grid_map/cloud", "camera/depth/points"),
+                    ("grid_map/cloud", "fake_sensor/cloud"),
                 ],
             ),
             Node(
@@ -371,7 +521,12 @@ def launch_setup(context, *args, **kwargs):
                 parameters=[{"num_drones": num_drones, "check_collision_freq": 10.0}],
             )
         )
-    if use_ai_velocity or use_ai_imu_velocity:
+    if (
+        use_ai_imu
+        or use_ai_velocity
+        or use_ai_imu_velocity
+        or use_ai_imu_comparison
+    ):
         actions.append(
             Node(
                 package="gestelt_bringup",
@@ -466,6 +621,46 @@ def generate_launch_description():
             description="Start AirIMU ONNX noise inference for drone0.",
         ),
         DeclareLaunchArgument(
+            "use_gazebo_vio_bridge",
+            default_value="false",
+            description=(
+                "Bridge Gazebo model pose for diagnostic SITL experiments. "
+                "It is not used for AI_IMU velocity navigation."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "back_end_planner",
+            default_value="ego",
+            description=(
+                "Back-end planner: ego, ssfc, or poly. "
+                "The forest experiment uses ego."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "use_entire_pcd_map",
+            default_value="false",
+            description=(
+                "Load the complete scenario PCD directly for planning. "
+                "Use true for static forest simulation."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "use_fake_sensor",
+            default_value="true",
+            description=(
+                "Run the expensive simulated range sensor. Disable it "
+                "when use_entire_pcd_map is true."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_vio_orientation_topic",
+            default_value="vio/odometry",
+            description=(
+                "Relative vision odometry topic used to align attitude "
+                "before takeover. Empty falls back to PX4 attitude."
+            ),
+        ),
+        DeclareLaunchArgument(
             "ai_imu_input_topic",
             default_value="mavros/imu/data_raw",
             description="Relative sensor_msgs/Imu topic used by AirIMU.",
@@ -493,17 +688,33 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "ai_imu_target_hz",
             default_value="200.0",
-            description="Interpolated AirIMU input rate.",
+            description="Expected native AirIMU input rate.",
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_minimum_input_hz",
+            default_value="180.0",
+            description=(
+                "Warn when native IMU input is below this rate; "
+                "interpolation cannot restore missing dynamics."
+            ),
         ),
         DeclareLaunchArgument(
             "ai_imu_interpolate",
             default_value="true",
-            description="Interpolate raw IMU samples to the target rate.",
+            description=(
+                "Resample the native PX4 IMU stream to the model rate. "
+                "This cannot repair a low-rate 50 Hz source."
+            ),
         ),
         DeclareLaunchArgument(
             "ai_imu_inference_stride",
             default_value="5",
-            description="Infer once per N interpolated IMU samples.",
+            description="Infer once per N native IMU samples.",
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_inference_threads",
+            default_value="1",
+            description="ONNX Runtime intra-op thread count.",
         ),
         DeclareLaunchArgument(
             "ai_imu_remap_mavros_axes",
@@ -511,10 +722,170 @@ def generate_launch_description():
             description="Map MAVROS FLU axes to the AirIMU model axes.",
         ),
         DeclareLaunchArgument(
+            "ai_imu_axis_mapping",
+            default_value="",
+            description=(
+                "Explicit AirIMU model-axis mapping such as z,-y,x, "
+                "x,y,z, or x,-y,-z. Empty uses the legacy remap settings."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_max_accel_correction",
+            default_value="2.0",
+            description=(
+                "Reject an ONNX acceleration correction whose norm exceeds "
+                "this value in m/s^2."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_max_gyro_correction",
+            default_value="0.2",
+            description=(
+                "Reject an ONNX gyro correction whose norm exceeds this "
+                "value in rad/s."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_accel_correction_blend",
+            default_value="1.0",
+            description="Use the full AirIMU accelerometer correction.",
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_gyro_correction_blend",
+            default_value="0.0",
+            description=(
+                "AirIMU gyro correction blend. Keep zero when the exported "
+                "model does not reproduce the SITL angular rate field; the "
+                "raw gyro remains an IMU attitude input, not a raw velocity "
+                "fallback."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "use_ai_imu_comparison",
+            default_value="false",
+            description=(
+                "Disabled. Corrected AI IMU must not be integrated into "
+                "navigation velocity."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_comparison_duration",
+            default_value="10.0",
+            description="VIO-parallel IMU comparison duration in seconds.",
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_comparison_minimum_input_hz",
+            default_value="180.0",
+            description=(
+                "Refuse to start comparison below this raw IMU rate."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_comparison_minimum_corrected_hz",
+            default_value="25.0",
+            description=(
+                "Refuse to start comparison below this corrected IMU rate."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_comparison_initialization_samples",
+            default_value="200",
+            description="Static samples used to calibrate each integrator.",
+        ),
+        DeclareLaunchArgument(
             "use_ai_imu_velocity",
             default_value="false",
             description=(
-                "Start experimental velocity-only odometry from corrected IMU."
+                "Disabled. AI_IMU velocity integration is inaccurate and "
+                "must not feed navigation."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_velocity_input_topic",
+            default_value="mavros/ai/imu_corrected",
+            description=(
+                "Relative sensor_msgs/Imu topic integrated by the velocity "
+                "estimator. Navigation is intentionally restricted to the "
+                "AirIMU-corrected stream."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_velocity_diagnostic_topic",
+            default_value="ai_imu/odometry",
+            description=(
+                "AI velocity odometry diagnostic topic used for handoff "
+                "validation without publishing to PX4."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_velocity_odometry_topic",
+            default_value="mavros/odometry/out",
+            description=(
+                "MAVROS ODOMETRY topic used only after EKF2_EV_CTRL=4 is "
+                "active, so PX4 fuses velocity and ignores AI pose."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_velocity_use_px4_attitude",
+            default_value="true",
+            description="Use PX4 attitude to bound strapdown attitude drift.",
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_velocity_freeze_attitude",
+            default_value="false",
+            description=(
+                "Freeze PX4 attitude after takeover. Keep false while "
+                "validating AirIMU translation because an incorrect model "
+                "gyro correction otherwise corrupts gravity removal."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_velocity_max_speed",
+            default_value="0.0",
+            description=(
+                "Optional world-speed stop threshold. Zero disables the stop "
+                "and keeps AI_IMU as the active source."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_velocity_calibrate_world_bias",
+            default_value="false",
+            description=(
+                "Estimate a world-frame acceleration residual against "
+                "healthy VIO velocity before takeover. Keep false by default "
+                "because low-passed hover residuals can cancel real small "
+                "translations after the VIO handoff."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_velocity_world_bias_tau",
+            default_value="2.0",
+            description="Low-pass time constant for world acceleration bias.",
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_velocity_max_world_bias",
+            default_value="2.0",
+            description="Maximum world acceleration bias in m/s^2.",
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_velocity_covariance_inflation",
+            default_value="4.0",
+            description="Inflation applied to propagated velocity covariance.",
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_velocity_minimum_horizontal_variance",
+            default_value="0.25",
+            description=(
+                "Minimum horizontal velocity variance used while AI IMU is "
+                "the active navigation source."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "ai_imu_velocity_minimum_vertical_variance",
+            default_value="100.0",
+            description=(
+                "Minimum vertical velocity variance. Keep this large so "
+                "barometric height, not IMU dead reckoning, controls altitude."
             ),
         ),
         DeclareLaunchArgument(

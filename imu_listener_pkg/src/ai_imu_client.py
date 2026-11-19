@@ -25,11 +25,52 @@ from realtime_imu_inference_buffer import (  # noqa: E402
     RealtimeIMUInference,
 )
 
+_AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
+
 
 def _as_bool(value) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in ("1", "true", "yes", "on")
     return bool(value)
+
+
+def parse_axis_mapping(value: str):
+    """Parse a model-axis mapping such as ``z,-y,x``."""
+    tokens = [
+        token.strip().lower()
+        for token in str(value).split(",")
+        if token.strip()
+    ]
+    if len(tokens) != 3:
+        raise ValueError(
+            "axis_mapping must contain exactly three axes, "
+            "for example z,-y,x"
+        )
+
+    order = []
+    signs = []
+    for token in tokens:
+        axis = token.lstrip("+-")
+        if axis not in _AXIS_INDEX or token not in {
+            axis,
+            f"+{axis}",
+            f"-{axis}",
+        }:
+            raise ValueError(
+                f"invalid axis mapping token {token!r}; "
+                "use x, -x, y, -y, z, or -z"
+            )
+        order.append(_AXIS_INDEX[axis])
+        signs.append(-1.0 if token.startswith("-") else 1.0)
+
+    if sorted(order) != [0, 1, 2]:
+        raise ValueError(
+            f"axis_mapping must use each source axis once, got {tokens}"
+        )
+    return (
+        np.asarray(order, dtype=np.int64),
+        np.asarray(signs, dtype=np.float64),
+    )
 
 
 class AiImuClient(Node):
@@ -47,12 +88,19 @@ class AiImuClient(Node):
         self.declare_parameter("model_path", "")
         self.declare_parameter("buffer_size", 200)
         self.declare_parameter("target_imu_hz", 200.0)
+        self.declare_parameter("minimum_input_hz", 180.0)
         self.declare_parameter("inference_stride", 5)
+        self.declare_parameter("inference_threads", 1)
         self.declare_parameter("interpolate", True)
         self.declare_parameter("max_interpolation_gap", 0.05)
         self.declare_parameter("remap_mavros_axes", True)
         self.declare_parameter("axis_order", [2, 1, 0])
         self.declare_parameter("axis_signs", [1, -1, 1])
+        self.declare_parameter("axis_mapping", "")
+        self.declare_parameter("max_accel_correction", 2.0)
+        self.declare_parameter("max_gyro_correction", 0.2)
+        self.declare_parameter("accel_correction_blend", 0.0)
+        self.declare_parameter("gyro_correction_blend", 0.2)
         self.declare_parameter("stats_interval", 5.0)
         self.declare_parameter("verbose", False)
 
@@ -72,8 +120,14 @@ class AiImuClient(Node):
         self.target_imu_hz = float(
             self.get_parameter("target_imu_hz").value
         )
+        self.minimum_input_hz = float(
+            self.get_parameter("minimum_input_hz").value
+        )
         self.inference_stride = int(
             self.get_parameter("inference_stride").value
+        )
+        self.inference_threads = int(
+            self.get_parameter("inference_threads").value
         )
         self.interpolate = _as_bool(
             self.get_parameter("interpolate").value
@@ -83,6 +137,18 @@ class AiImuClient(Node):
         )
         self.remap_mavros_axes = _as_bool(
             self.get_parameter("remap_mavros_axes").value
+        )
+        self.max_accel_correction = float(
+            self.get_parameter("max_accel_correction").value
+        )
+        self.max_gyro_correction = float(
+            self.get_parameter("max_gyro_correction").value
+        )
+        self.accel_correction_blend = float(
+            self.get_parameter("accel_correction_blend").value
+        )
+        self.gyro_correction_blend = float(
+            self.get_parameter("gyro_correction_blend").value
         )
         self.stats_interval = float(
             self.get_parameter("stats_interval").value
@@ -120,6 +186,7 @@ class AiImuClient(Node):
             "samples_published": 0,
             "samples_dropped": 0,
             "corrupted_outputs": 0,
+            "corrections_rejected": 0,
             "total_ai_time_ms": 0.0,
             "start_time": time.monotonic(),
             "last_stats_time": time.monotonic(),
@@ -131,6 +198,7 @@ class AiImuClient(Node):
         self.inference = RealtimeIMUInference(
             self.model_path,
             seqlen=self.buffer_size,
+            intra_op_num_threads=self.inference_threads,
             verbose=self.verbose,
         )
         if self.verbose:
@@ -165,8 +233,12 @@ class AiImuClient(Node):
         self.get_logger().info(
             f"interpolate={self.interpolate}, "
             f"target={self.target_imu_hz:.1f} Hz, "
+            f"minimum_input={self.minimum_input_hz:.1f} Hz, "
             f"stride={self.inference_stride}, "
-            f"remap_mavros_axes={self.remap_mavros_axes}"
+            f"threads={self.inference_threads}, "
+            f"remap_mavros_axes={self.remap_mavros_axes}, "
+            f"axis_order={self.axis_order.tolist()}, "
+            f"axis_signs={self.axis_signs.tolist()}"
         )
 
     def _validate_parameters(self):
@@ -181,14 +253,35 @@ class AiImuClient(Node):
             raise ValueError("buffer_size must be positive")
         if self.target_imu_hz <= 0.0:
             raise ValueError("target_imu_hz must be positive")
+        if self.minimum_input_hz < 0.0:
+            raise ValueError("minimum_input_hz must be non-negative")
         if self.inference_stride <= 0:
             raise ValueError("inference_stride must be positive")
+        if self.inference_threads <= 0:
+            raise ValueError("inference_threads must be positive")
         if self.max_interpolation_gap <= 0.0:
             raise ValueError("max_interpolation_gap must be positive")
+        if self.max_accel_correction <= 0.0:
+            raise ValueError("max_accel_correction must be positive")
+        if self.max_gyro_correction <= 0.0:
+            raise ValueError("max_gyro_correction must be positive")
+        if not 0.0 <= self.accel_correction_blend <= 1.0:
+            raise ValueError(
+                "accel_correction_blend must be in [0, 1]"
+            )
+        if not 0.0 <= self.gyro_correction_blend <= 1.0:
+            raise ValueError(
+                "gyro_correction_blend must be in [0, 1]"
+            )
         if self.stats_interval <= 0.0:
             raise ValueError("stats_interval must be positive")
 
     def _axis_configuration(self):
+        mapping = str(
+            self.get_parameter("axis_mapping").value
+        ).strip()
+        if mapping:
+            return parse_axis_mapping(mapping)
         if not self.remap_mavros_axes:
             return np.array([0, 1, 2]), np.ones(3, dtype=np.float64)
 
@@ -417,6 +510,37 @@ class AiImuClient(Node):
             )
             return None
 
+        accel_correction = corrected_accel - accel
+        gyro_correction = corrected_gyro - gyro
+        accel_correction_norm = float(
+            np.linalg.norm(accel_correction)
+        )
+        gyro_correction_norm = float(
+            np.linalg.norm(gyro_correction)
+        )
+        if (
+            accel_correction_norm > self.max_accel_correction
+            or gyro_correction_norm > self.max_gyro_correction
+        ):
+            self.stats["corrections_rejected"] += 1
+            if self.stats["corrections_rejected"] in (1, 100) or (
+                self.stats["corrections_rejected"] % 1000 == 0
+            ):
+                self.get_logger().error(
+                    "Dropping AirIMU output with excessive correction: "
+                    f"accel={accel_correction_norm:.3f} m/s^2, "
+                    f"gyro={gyro_correction_norm:.3f} rad/s; "
+                    "the raw stream is not substituted"
+                )
+            return None
+
+        corrected_accel = accel + self.accel_correction_blend * (
+            corrected_accel - accel
+        )
+        corrected_gyro = gyro + self.gyro_correction_blend * (
+            corrected_gyro - gyro
+        )
+
         return {
             "corrected_accel": corrected_accel,
             "corrected_gyro": corrected_gyro,
@@ -511,6 +635,15 @@ class AiImuClient(Node):
             if processed
             else 0.0
         )
+        if (
+            self.minimum_input_hz > 0.0
+            and received_hz < self.minimum_input_hz
+        ):
+            self.get_logger().warning(
+                f"Native IMU input is only {received_hz:.1f} Hz; "
+                f"the model requires at least {self.minimum_input_hz:.1f} "
+                "Hz and interpolation cannot restore missing dynamics"
+            )
 
         self.get_logger().info(
             f"raw={received_hz:.0f} Hz, "

@@ -1,0 +1,400 @@
+PX4 validity 锁存仿真执行说明
+==============================
+
+更新时间：2026-11-20
+适用工程：
+  /home/cjc/ws_capstone/PX4-Autopilot
+  /home/cjc/ws_capstone/gestelt
+
+测试目标
+--------
+验证 Raynor SITL 在以下条件下持续保持水平 local validity：
+
+  xy_valid=True
+  v_xy_valid=True
+  local_position_invalid=False
+  local_velocity_invalid=False
+
+当前配置：
+  COM_POS_FS_HOLD=1
+  COM_POS_FS_EVV=0
+  EKF2_EV_CTRL=7
+
+说明：
+  1. COM_POS_FS_HOLD 只在飞机解锁后、水平位置和速度首次有效后开始锁存。
+  2. 锁存只处理水平 validity 标志，不保证位置准确。
+  3. 姿态、高度、角速度、电机和动力健康检查仍然独立生效。
+  4. AI_IMU 速度积分、comparison 和 ODOMETRY 接管仍保持禁用。
+
+
+一、关闭旧进程
+--------------
+执行：
+
+  tmux list-sessions
+
+如果存在：
+
+  gestelt-ai
+
+则关闭：
+
+  cd /home/cjc/ws_capstone/gestelt
+  bash gestelt_bringup/scripts/vio_ai_experiment.sh stop
+
+确认没有旧的 PX4、Gazebo、MAVROS 残留：
+
+  pgrep -af \
+    'px4_sitl_default/bin/px4|gzserver|ros2 launch gestelt_bringup|mavros_node'
+
+
+二、首次安装或修改 PX4 代码后重新构建
+------------------------------------
+PX4：
+
+  cd /home/cjc/ws_capstone/PX4-Autopilot
+  DONT_RUN=1 make px4_sitl gazebo-classic_raynor
+
+安装 Raynor 模型、机型和参数：
+
+  cd /home/cjc/ws_capstone/gestelt
+  bash gestelt_bringup/scripts/install_raynor_sitl.sh
+
+ROS 2 包：
+
+  source /opt/ros/humble/setup.bash
+  colcon build --symlink-install \
+    --packages-select ai_msgs imu_listener_pkg gestelt_bringup
+  source install/setup.bash
+
+
+三、启动完整仿真
+----------------
+任务默认自动启动，不需要再按 Enter。
+
+执行：
+
+  cd /home/cjc/ws_capstone/gestelt
+  bash gestelt_bringup/scripts/vio_ai_experiment.sh
+
+脚本会：
+  1. 启动 PX4 + Gazebo Raynor。
+  2. 启动 Gestelt、MAVROS 和 AI_IMU 推理。
+  3. 设置 EKF2_EV_CTRL=7、EKF2_GPS_CTRL=0、EKF2_HGT_REF=0。
+  4. 检查并保存当前 EKF2 参数。安装脚本已把它们写入 parameters.bson，
+     首次启动时即已加载，不再从 tmux 内部重启 PX4。
+  5. 创建 2x2 tmux 会话 gestelt-ai。
+
+窗格布局：
+  左上：PX4 + Gazebo
+  右上：任务与操作菜单
+  左下：Gestelt + MAVROS
+  右下：AI_IMU 诊断
+
+
+四、预飞参数检查
+----------------
+进入左上 PX4 窗格，确认：
+
+  Ready for takeoff!
+
+然后执行：
+
+  param show COM_POS_FS_HOLD
+
+预期：
+
+  COM_POS_FS_HOLD : 1
+
+继续检查：
+
+  param show COM_POS_FS_EVV
+
+预期：
+
+  COM_POS_FS_EVV : 0
+
+检查 EKF2：
+
+  param show EKF2_EV_CTRL
+  param show EKF2_GPS_CTRL
+  param show EKF2_HGT_REF
+
+当前预期：
+
+  EKF2_EV_CTRL=7
+  EKF2_GPS_CTRL=0
+  EKF2_HGT_REF=0
+
+
+五、检查 VIO 和 AI_IMU
+----------------------
+在任意终端执行：
+
+  source /opt/ros/humble/setup.bash
+  cd /home/cjc/ws_capstone/gestelt
+  source install/setup.bash
+  export ROS_DOMAIN_ID=3
+  export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+
+检查 PX4 状态：
+
+  ros2 topic echo --once /drone0/mavros/state
+
+检查 AI 修正 IMU：
+
+  ros2 topic hz /drone0/mavros/ai/imu_corrected
+
+预期约 30-40 Hz。
+
+查看一次 AI 修正 IMU：
+
+  ros2 topic echo --once /drone0/mavros/ai/imu_corrected \
+    --field linear_acceleration
+
+检查 VIO 已融合：
+
+  切回左上 PX4 窗格，执行：
+
+  listener estimator_status_flags
+
+预期：
+
+  cs_gps=False
+  cs_ev_pos=True
+  cs_ev_vel=True
+
+
+六、开始任务并进入稳定 OFFBOARD
+-------------------------------
+在右上操作窗格确认 GPS guard 已打印 GPS disabled。
+节点就绪后，脚本会自动启动 rmuc2025 任务。
+
+等待飞机起飞并向 RMUC 2025 终点 (6, -24, 1.0) m 导航。
+
+检查 PX4 状态：
+
+  ros2 topic echo --once /drone0/mavros/state
+
+预期：
+
+  connected=True
+  armed=True
+  mode=OFFBOARD
+
+检查位置：
+
+  ros2 topic echo --once /drone0/mavros/local_position/odom \
+    --field pose.pose.position
+
+在 PX4 窗格检查：
+
+  listener vehicle_local_position 1
+
+预期：
+
+  xy_valid=True
+  v_xy_valid=True
+  dead_reckoning=False
+
+当飞机进入稳定 OFFBOARD 后，PX4 应打印：
+
+  Test EKF2 horizontal valid output hold active
+  Test horizontal validity hold active; local estimate may drift
+
+只有看到上述锁存提示，才说明测试条件成立。
+
+
+七、注入 VIO 失效
+-----------------
+方法 A：使用操作菜单
+
+  在右上操作窗格按：
+
+    v
+
+方法 B：直接调用 MAVROS 服务
+
+  ros2 service call /drone0/mavros/cmd/command \
+    mavros_msgs/srv/CommandLong \
+    "{broadcast: false, command: 420, confirmation: 0,
+      param1: 6.0, param2: 1.0, param3: 0.0, param4: 0.0,
+      param5: 0.0, param6: 0.0, param7: 0.0}"
+
+预期服务返回：
+
+  success=True
+  result=0
+
+PX4 日志预期：
+
+  CMD_INJECT_FAILURE, vio off
+
+
+八、持续检查水平 validity
+-------------------------
+推荐至少观察 35 秒。
+
+在 PX4 窗格执行：
+
+  listener vehicle_local_position 1
+
+重点只看：
+
+  xy_valid
+  v_xy_valid
+  dead_reckoning
+
+目标结果：
+
+  xy_valid=True
+  v_xy_valid=True
+
+dead_reckoning 可以变为 True，这是惯性传播状态，不是测试失败。
+
+继续执行：
+
+  listener failsafe_flags 1
+
+目标结果：
+
+  local_position_invalid=False
+  local_position_invalid_relaxed=False
+  local_velocity_invalid=False
+
+以下标志可以不等于 False：
+
+  global_position_invalid
+  其他姿态、动力、遥控或数据链相关标志
+
+因为当前锁存只覆盖水平位置和速度 validity。
+
+
+九、MAVROS 连续观察
+-------------------
+可选：
+
+  watch -n 1 \
+    "ros2 topic echo --once /drone0/mavros/state"
+
+查看位置：
+
+  watch -n 1 \
+    "ros2 topic echo --once /drone0/mavros/local_position/odom \
+      --field pose.pose.position"
+
+注意：
+  validity=True 不代表估计位置正确。
+  VIO off 后位置可能明显漂移。
+  漂移过大、姿态异常或动力异常时，应立即人工接管并降落。
+
+
+十、记录测试数据
+----------------
+可选录制 ROS 2 bag：
+
+  ros2 bag record -o validity_hold \
+    /drone0/mavros/state \
+    /drone0/mavros/local_position/odom \
+    /drone0/mavros/imu/data_raw \
+    /drone0/mavros/ai/imu_corrected
+
+PX4 日志位于：
+
+  /home/cjc/ws_capstone/PX4-Autopilot/build/px4_sitl_default/rootfs/log/
+
+
+十一、恢复 VIO 或降落
+---------------------
+恢复 VIO：
+
+  在操作菜单按 r
+
+或者调用：
+
+  ros2 service call /drone0/mavros/cmd/command \
+    mavros_msgs/srv/CommandLong \
+    "{broadcast: false, command: 420, confirmation: 0,
+      param1: 6.0, param2: 0.0, param3: 0.0, param4: 0.0,
+      param5: 0.0, param6: 0.0, param7: 0.0}"
+
+请求降落：
+
+  在操作菜单按 l
+
+或者：
+
+  ros2 service call /drone0/mavros/set_mode \
+    mavros_msgs/srv/SetMode \
+    "{base_mode: 0, custom_mode: 'AUTO.LAND'}"
+
+
+十二、结束仿真
+--------------
+退出 tmux：
+
+  Ctrl+b，然后按 d
+
+关闭整个仿真：
+
+  cd /home/cjc/ws_capstone/gestelt
+  bash gestelt_bringup/scripts/vio_ai_experiment.sh stop
+
+确认进程已退出：
+
+  pgrep -af \
+    'px4_sitl_default/bin/px4|gzserver|ros2 launch gestelt_bringup|mavros_node'
+
+
+十三、常见问题
+--------------
+1. COM_POS_FS_HOLD 不是 1
+
+  重新执行：
+
+    bash gestelt_bringup/scripts/install_raynor_sitl.sh
+
+  然后检查：
+
+    /home/cjc/ws_capstone/PX4-Autopilot/build/px4_sitl_default/rootfs/parameters.applied.txt
+
+  应包含：
+
+    COM_POS_FS_HOLD: <missing> -> 1
+
+2. 没有锁存提示
+
+  检查：
+    - 飞机是否已经 armed。
+    - 起飞前 xy_valid 和 v_xy_valid 是否曾经为 True。
+    - COM_POS_FS_HOLD 是否在本次解锁前已经设为 1。
+    - 当前运行的 PX4 是否为最新构建。
+
+3. VIO off 后很快 invalid
+
+  优先检查：
+    listener vehicle_local_position 1
+    param show COM_POS_FS_HOLD
+
+  如果 COM_POS_FS_HOLD=0，锁存不会生效。
+
+4. validity 保持但飞机仍在降落
+
+  这不是矛盾。其他健康检查仍可能触发独立的 failsafe。
+  validity 锁存不屏蔽姿态、动力、碰撞和遥控失效。
+
+
+十四、测试通过标准
+------------------
+必须同时满足：
+
+  1. VIO off 前，飞机已经 armed 且水平状态曾经有效。
+  2. 出现 EKF2 与 Commander 的锁存日志。
+  3. VIO off 后至少 35 秒，xy_valid=True。
+  4. VIO off 后至少 35 秒，v_xy_valid=True。
+  5. local_position_invalid=False。
+  6. local_velocity_invalid=False。
+  7. AI_IMU 速度积分和 ODOMETRY 接管没有启动。
+
+该测试只能证明水平 validity 标志保持。
+不能单独证明位置精度、实机可靠性或适航安全。

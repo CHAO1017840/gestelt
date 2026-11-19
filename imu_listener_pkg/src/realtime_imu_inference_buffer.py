@@ -111,12 +111,16 @@ class RealtimeIMUInference:
         seqlen: int = 200,
         interval: int = 9,
         gravity: float = 9.81007,
+        intra_op_num_threads: int = 1,
         verbose: bool = False,
     ):
         self.model_path = os.fspath(model_path)
         self.seqlen = int(seqlen)
         self.interval = int(interval)
+        self.intra_op_num_threads = int(intra_op_num_threads)
         self.verbose = bool(verbose)
+        if self.intra_op_num_threads < 1:
+            raise ValueError("intra_op_num_threads must be positive")
 
         self.buffer = IMUBuffer(self.seqlen)
         self.padding_gen = PaddingGenerator(
@@ -146,7 +150,10 @@ class RealtimeIMUInference:
             session_options.graph_optimization_level = (
                 ort.GraphOptimizationLevel.ORT_ENABLE_ALL
             )
-            session_options.intra_op_num_threads = 2
+            session_options.intra_op_num_threads = (
+                self.intra_op_num_threads
+            )
+            session_options.inter_op_num_threads = 1
             session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
 
             self.onnx_session = ort.InferenceSession(

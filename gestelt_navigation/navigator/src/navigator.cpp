@@ -203,6 +203,19 @@ void Navigator::initParams(ros::NodeHandle &nh, ros::NodeHandle &pnh)
   /* Back-end params */
   // pnh.param("back_end/planner_frequency", be_planner_freq_, -1.0);
   pnh.param("back_end/num_replan_retries", optimizer_num_retries_, -1);
+  pnh.param("back_end/failure_backoff_initial",
+            planning_failure_backoff_initial_, 0.5);
+  pnh.param("back_end/failure_backoff_max",
+            planning_failure_backoff_max_, 2.0);
+  pnh.param("back_end/failure_backoff_multiplier",
+            planning_failure_backoff_multiplier_, 2.0);
+  planning_failure_backoff_initial_ =
+      std::max(0.0, planning_failure_backoff_initial_);
+  planning_failure_backoff_max_ =
+      std::max(planning_failure_backoff_initial_,
+               planning_failure_backoff_max_);
+  planning_failure_backoff_multiplier_ =
+      std::max(1.0, planning_failure_backoff_multiplier_);
   pnh.param("optimization/num_cstr_pts_per_seg", num_cstr_pts_per_seg_, -1);
   pnh.param("optimization/segment_length", segment_length_, -1.0);
 
@@ -608,11 +621,55 @@ bool Navigator::generateFrontEndPlan(
   return true;
 }
 
+void Navigator::resetPlanningFailureBackoff()
+{
+  consecutive_planning_failures_ = 0;
+  next_planning_attempt_time_ = 0.0;
+}
+
+void Navigator::registerPlanningFailure()
+{
+  consecutive_planning_failures_++;
+
+  double retry_delay = planning_failure_backoff_initial_;
+  for (int failure = 1;
+       failure < consecutive_planning_failures_ &&
+       retry_delay < planning_failure_backoff_max_;
+       ++failure)
+  {
+    retry_delay = std::min(
+        planning_failure_backoff_max_,
+        retry_delay * planning_failure_backoff_multiplier_);
+  }
+
+  next_planning_attempt_time_ = ros::Time::now().toSec() + retry_delay;
+  logWarn(str_fmt(
+      "Back-end planning failed %d consecutive time(s); retry in %.2f s",
+      consecutive_planning_failures_, retry_delay));
+}
+
+void Navigator::registerPlanningSuccess()
+{
+  if (consecutive_planning_failures_ > 0)
+  {
+    logInfo(str_fmt("Back-end planning recovered after %d failure(s)",
+                    consecutive_planning_failures_));
+  }
+  resetPlanningFailureBackoff();
+}
+
 bool Navigator::requestBackEndPlan(
   const Eigen::Vector3d &goal_pos, const Eigen::Vector3d &goal_vel, const Eigen::Vector3d &goal_acc)
 {
   // Check 1: if waypoint queue is empty
   if (waypoints_.empty()){
+    return false;
+  }
+
+  // Avoid running a full optimizer solve at timer rate while the same plan
+  // continues to fail. A new goal resets this backoff immediately.
+  if (ros::Time::now().toSec() < next_planning_attempt_time_)
+  {
     return false;
   }
 
@@ -682,6 +739,7 @@ bool Navigator::requestBackEndPlan(
   tm_back_end_plan_.stop(print_timers_);
 
   if (!plan_success){
+    registerPlanningFailure();
     return false;
   }
 
@@ -712,6 +770,7 @@ bool Navigator::requestBackEndPlan(
 
   prev_req_be_req_t_ = ros::Time::now().toSec();
 
+  registerPlanningSuccess();
   return true;
 }
 

@@ -1,0 +1,661 @@
+AI_IMU + VIO + PX4 SITL 完整运行流程
+====================================
+更新日期：2026-11-10
+环境：Ubuntu 22.04 + ROS 2 Humble + PX4 v1.14 + Gazebo Classic
+模型：Raynor（SYS_AUTOSTART=1020）
+
+
+一、当前参数配置
+----------------
+以下参数已经写入 Raynor SITL 安装流程：
+
+  SYS_AUTOSTART       1020
+  EKF2_EV_CTRL        7
+  EKF2_GPS_CTRL       0
+  EKF2_HGT_REF        0
+  EKF2_PREDICT_US     10000
+  COM_POS_FS_EVV      0
+  COM_POS_FS_HOLD     1
+  CBRK_SUPPLY_CHK     894281
+
+参数含义：
+
+  EKF2_EV_CTRL=7
+    VIO 正常时融合外部位置和 3D 速度。
+
+  COM_POS_FS_EVV=0
+    不把 AI_IMU 积分速度作为本地有效性的依据。
+
+  COM_POS_FS_HOLD=1
+    受控测试模式，SITL、HIL 和真实硬件使用同一套 PX4 逻辑。
+    Raynor SITL 在机型文件中默认启用；真实硬件需在测试参数集中显式设置。
+    飞机解锁且本地水平位置/速度首次有效后，EKF2 在本次解锁期间
+    持续发布 xy_valid=True 和 v_xy_valid=True，Commander 同时保持
+    local_position_invalid 和 local_velocity_invalid 为 False。
+    该参数不会让惯性推算变得准确，位置仍可能漂移。
+    PX4 默认值为 0，生产配置不得启用。
+
+  EKF2_GPS_CTRL=0
+    EKF2 不融合 GPS。
+
+  EKF2_HGT_REF=0
+    高度参考使用气压计。
+
+  CBRK_SUPPLY_CHK=894281
+    跳过 SITL 的系统电源检查。
+    本地 PX4 v1.14 必须使用这个兼容值，否则 arm 时会报：
+    Preflight Fail: system power unavailable
+
+注意：
+  - 本地 PX4 源码是 v1.14，参数文件来自 v1.16。
+  - 安装脚本只应用本地 PX4 能识别的参数。
+  - 未支持的参数会记录在：
+    /home/cjc/ws_capstone/PX4-Autopilot/build/px4_sitl_default/rootfs/parameters.applied.txt
+
+
+二、重新安装模型和参数
+----------------------
+先关闭所有 PX4、Gazebo、MAVROS 和 Gestelt 进程。
+
+终端 1：
+
+  cd /home/cjc/ws_capstone/gestelt
+
+  ./gestelt_bringup/scripts/install_raynor_sitl.sh \
+    /home/cjc/ws_capstone/PX4-Autopilot
+
+安装脚本会：
+  1. 安装 Raynor Gazebo 模型。
+  2. 安装 1020 airframe。
+  3. 安装 1020 airframe 的 .post 脚本。
+  4. 把 MAVLink HIGHRES_IMU 在 offboard 链路上提高到 200 Hz。
+  5. 把 QGC 参数转换为 PX4 BSON 参数库。
+  6. 自动应用上面的关键参数覆盖。
+  7. 备份旧 parameters.bson。
+
+第一次安装或修改了 CMake/airframe 时，执行：
+
+  cd /home/cjc/ws_capstone/PX4-Autopilot
+  DONT_RUN=1 make px4_sitl gazebo-classic_raynor
+
+
+三、启动 PX4 和 Gazebo
+----------------------
+终端 1：
+
+  cd /home/cjc/ws_capstone/PX4-Autopilot
+  export GAZEBO_IP=127.0.0.1
+  export GAZEBO_MASTER_URI=http://127.0.0.1:11345
+
+  make px4_sitl gazebo-classic_raynor
+
+如果不需要 Gazebo 界面：
+
+  HEADLESS=1 make px4_sitl gazebo-classic_raynor
+
+等待 PX4 出现：
+
+  Ready for takeoff!
+
+不要重复启动多个 PX4 或 Gazebo 实例。启动前可检查：
+
+  pgrep -af 'px4|gzserver|gazebo'
+
+
+四、启动 Gestelt、MAVROS 和 AI_IMU
+----------------------------------
+终端 2：
+
+  source /opt/ros/humble/setup.bash
+  cd /home/cjc/ws_capstone/gestelt
+  source install/setup.bash
+
+如需重新编译：
+
+  colcon build --symlink-install \
+    --packages-select ai_msgs imu_listener_pkg gestelt_bringup
+  source install/setup.bash
+
+第一阶段只做 VIO 正常悬停下的并行算法比较：
+
+  ros2 launch gestelt_bringup scenario_ros2.launch.py \
+    scenario:=rmuc2025 \
+    back_end_planner:=ego \
+    run_mission:=false \
+    use_rviz:=true \
+    use_gazebo:=false \
+    use_fake_drone:=false \
+    use_mavros:=true \
+    use_ai_imu:=true \
+    use_ai_imu_comparison:=true \
+    use_ai_imu_velocity:=false \
+    ai_imu_axis_mapping:=x,y,z \
+    enforce_gps_off:=true
+
+关键说明：
+
+  use_gazebo:=false
+    Gazebo 已经由 PX4 启动，不要重复启动。
+
+  use_ai_imu_comparison:=true
+    同时积分原始 IMU 和修正 IMU，只用于比较。
+    不向 /mavros/odometry/out 发布任何数据，不改变 VIO 控制路径。
+
+  ai_imu_interpolate:=true
+    PX4 原生 IMU 为 250 Hz，客户端重采样到模型要求的 200 Hz。
+    这不是把 50 Hz 数据插值成 200 Hz。
+
+  ai_imu_inference_stride:=5
+    模型窗口仍由真实 200 Hz 样本组成，
+    每 5 个模型样本执行一次推理，修正输出约 40 Hz。
+
+  use_ai_imu_velocity:=false
+    第一阶段不能开启接管速度输出。
+
+  enforce_gps_off:=true
+    强制 EKF2_GPS_CTRL=0，并阻断 HIL_GPS。
+
+不要同时设置：
+
+  use_ai_velocity:=true
+  use_ai_imu_velocity:=true
+
+比较阶段不允许其他节点向 /mavros/odometry/out 发布。
+
+
+五、等待初始化完成
+------------------
+启动过程中应看到：
+
+  GPS disabled: EKF2_GPS_CTRL=0 and HIL_GPS blocked
+
+AI 节点应显示原始约 250 Hz、模型重采样 200 Hz，例如：
+
+  interpolate=True, target=200.0 Hz, minimum_input=180.0 Hz,
+  stride=5
+  raw=230~240 Hz, interpolated=200 Hz, processed=40 Hz, window=100%,
+  dropped=0, corrupted=0
+
+如果仍显示 raw=50 Hz，说明旧的 PX4 build 或 .post 脚本未生效。
+此时比较服务会拒绝启动，不能继续做算法判断。
+
+等待静态校准完成：
+
+  raw IMU calibration complete: gyro_bias=[...]
+  corrected IMU calibration complete: gyro_bias=[...]
+
+模型重采样后的 200 Hz 下，200 个校准样本约需 1 秒。
+
+尚未接管时，AI 速度节点应显示：
+
+  navigation_enabled=False
+
+这是正常待命状态：
+
+  /drone0/ai_imu/comparison/raw_velocity        未开始
+  /drone0/ai_imu/comparison/corrected_velocity  未开始
+  /drone0/mavros/odometry/out    0 Hz
+
+校准期间飞机必须静止、水平放置。
+
+
+六、检查数据频率
+----------------
+终端 3：
+
+  source /opt/ros/humble/setup.bash
+  cd /home/cjc/ws_capstone/gestelt
+  source install/setup.bash
+
+  ros2 topic hz /drone0/mavros/imu/data_raw
+  ros2 topic hz /drone0/mavros/ai/imu_corrected
+  ros2 topic hz /drone0/ai_imu/velocity
+
+默认检查值：
+
+  /drone0/mavros/imu/data_raw          约 230~240 Hz
+  /drone0/mavros/ai/imu_corrected      约 40 Hz
+
+PX4 原始数据为 250 Hz，模型内部重采样为 200 Hz。
+比较服务要求原始 IMU 不低于 180 Hz、修正 IMU 不低于 25 Hz。
+50 Hz 通过插值变成 200 Hz 不是有效替代。
+
+如果原始 IMU 低于 180 Hz：
+  1. 停止算法比较。
+  2. 检查 Raynor .post 是否已进入当前 PX4 build。
+  3. 重新执行 install_raynor_sitl.sh 和 DONT_RUN=1 make。
+  4. 不要在 50 Hz 输入上继续调 EKF 参数。
+
+
+七、PX4 起飞前检查
+------------------
+在 PX4 的 pxh> 终端执行：
+
+  param show EKF2_EV_CTRL
+  param show EKF2_GPS_CTRL
+  param show EKF2_HGT_REF
+  param show CBRK_SUPPLY_CHK
+
+期望：
+
+  EKF2_EV_CTRL       15
+  EKF2_GPS_CTRL      0
+  EKF2_HGT_REF       3
+  CBRK_SUPPLY_CHK    894281
+
+继续检查：
+
+  commander check
+  listener estimator_status_flags -n 1
+  listener vehicle_local_position -n 1
+  listener vehicle_visual_odometry -n 1
+
+必须满足：
+
+  Preflight check: OK
+  cs_gps=False
+  cs_gps_hgt=False
+  cs_ev_pos=True
+  cs_ev_vel=True
+  cs_ev_hgt=True
+  cs_ev_yaw=True
+  cs_inertial_dead_reckoning=False
+  xy_valid=True
+  v_xy_valid=True
+  dead_reckoning=False
+
+vehicle_visual_odometry 必须持续更新。
+
+如果视觉数据只出现一次或停止更新，不得起飞。
+
+说明：
+  cs_baro_hgt=True 通常没有问题。
+  气压计仍可作为视觉高度的辅助源，不属于 GPS。
+
+
+八、使用 VIO 起飞和悬停
+-----------------------
+终端 3：
+
+  source /opt/ros/humble/setup.bash
+  cd /home/cjc/ws_capstone/gestelt
+  source install/setup.bash
+
+发送 TAKEOFF：
+
+  ros2 topic pub --once /drone0/traj_server/command \
+    gestelt_msgs/msg/Command "{command: 0}"
+
+轨迹服务器会：
+  1. 设置 OFFBOARD。
+  2. 请求 arm。
+  3. 起飞到默认悬停高度。
+  4. 进入 HOVER。
+
+监控：
+
+  ros2 topic echo /drone0/mavros/state
+  ros2 topic echo /drone0/mavros/local_position/odom \
+    --field pose.pose.position
+  ros2 topic echo /drone0/traj_server/state
+
+日志出现以下内容才算起飞完成：
+
+  [TAKEOFF] Take off complete
+  Transitioning server state: TAKEOFF -> HOVER
+
+起飞阶段必须保持 VIO 开启。
+
+到达稳定 HOVER 后启动 10 秒并行比较：
+
+  ros2 service call \
+    /drone0/ai_imu_comparison/start_comparison \
+    std_srvs/srv/Trigger "{}"
+
+服务会拒绝低于 180 Hz 的任一流。比较期间监控：
+
+  ros2 topic echo /drone0/ai_imu/comparison/raw_velocity
+  ros2 topic echo /drone0/ai_imu/comparison/corrected_velocity
+
+结束时节点会打印：
+
+  raw_error
+  corrected_error
+  corrected_vs_raw
+  max_gap_raw
+  max_gap_corrected
+
+只有原始 IMU 积分正常、修正 IMU 的误差在可接受范围内，
+才进入下一步接管测试。
+
+
+九、可选：执行任务航点
+----------------------
+确认已经在稳定 HOVER 后，再执行：
+
+  python3 \
+    /home/cjc/ws_capstone/gestelt/install/gestelt_bringup/share/gestelt_bringup/scenarios/rmuc2025.py
+
+rmuc2025 会发送：
+
+  (6, -24, 1.0)
+
+不要让任务脚本在 AI 校准完成前自动运行。
+
+
+十、已禁用：AI_IMU 积分速度不得接管 VIO
+-------------------------
+本节历史命令仅保留故障复现记录，不得用于当前仿真或实机。
+
+当前要求：
+  1. corrected AI_IMU 只用于推理、修正和诊断。
+  2. 不将 corrected AI_IMU 积分成导航速度。
+  3. 不发布由 AI_IMU 速度生成的 mavros/odometry/out。
+  4. 不设置 allow_velocity_estimation=true。
+  5. 不设置 allow_ai_velocity_navigation=true。
+  6. 测试模式使用 COM_POS_FS_HOLD=1：
+     首次有效解锁后，VIO 失效仍保持水平位置和速度 valid。
+     位置控制继续使用 EKF2 惯性传播，但位置会漂移。
+
+当前默认启动：
+
+  use_ai_imu=true
+  use_ai_imu_velocity=false
+  use_ai_imu_comparison=false
+  use_gazebo_vio_bridge=false
+
+以下历史接管命令已失效。ai_failover.py 默认拒绝执行：
+
+终端 3：
+
+  source /opt/ros/humble/setup.bash
+  cd /home/cjc/ws_capstone/gestelt
+  source install/setup.bash
+
+  ros2 run gestelt_bringup ai_failover.py
+
+接管流程（默认）会依次：
+  1. 检查飞机是否已经起飞并悬停。
+  2. 读取当前 PX4 位置、速度和姿态。
+  3. 启用 AI 诊断积分，但不向 PX4 发布 ODOMETRY。
+  4. 将 EKF2_EV_CTRL 从 7 改为 4，只允许融合外部速度。
+  5. 用当前健康 VIO 状态重新初始化 AI 积分器。
+  6. 启用 mavros/odometry/out，然后注入 VIO off。
+  7. AI_IMU 持续提供速度，位置由 EKF 传播，默认不自动降落。
+
+执行命令：
+  ros2 run gestelt_bringup ai_failover.py \
+    --ros-args -p validate_ai_velocity:=false
+
+该参数默认已经是 false，也可以省略。
+这个模式不会因为 AI 速度误差超限而中止 AI，
+默认 `auto_land_after_takeover=0.0`，即持续使用 AI_IMU。
+如果只做受控短时测试，可以显式设置：
+
+  --ros-args -p auto_land_after_takeover:=5.0
+
+
+可选的安全接管模式：
+  ros2 run gestelt_bringup ai_failover.py \
+    --ros-args -p validate_ai_velocity:=true
+
+该模式保持 VIO 开启 10 秒，AI 速度误差超过 0.5 m/s 时
+关闭 AI 导航并保持 VIO。
+
+校验参数：
+  validation_duration      10.0 秒
+  max_velocity_error       0.5 m/s
+  min_validation_samples   20
+  validate_ai_velocity     默认 false
+
+AI 速度与健康 VIO 速度的误差超过 0.5 m/s 时，接管会自动中止：
+
+  AI velocity validation failed
+  AI failover aborted: VIO remains enabled
+
+此时 VIO 不会被关闭，飞机可以继续悬停。
+
+成功后应看到：
+
+  AI navigation enable failed 不应出现
+  VIO failure injection failed 不应出现
+  AI velocity validation passed
+  AI failover committed
+
+检查 AI ODOMETRY 已开始发布：
+
+  ros2 topic hz /drone0/mavros/odometry/out
+
+启用速度节点后，ODOMETRY 发布频率约为修正 IMU 的 30-40 Hz。
+它不是 200 Hz 原始 IMU 频率。
+
+PX4 中检查：
+
+  listener estimator_status_flags -n 1
+  listener vehicle_local_position -n 1
+
+期望 VIO off 后仍保持：
+
+  cs_ev_vel=True
+  cs_inertial_dead_reckoning=False
+  xy_valid=True
+  v_xy_valid=True
+  v_z_valid=True
+
+EKF2_EV_CTRL=7 在 VIO 正常时融合水平/垂直位置和速度。
+接管时切换为 4；VIO off 后只融合 AI 速度，忽略 AI 积分位置和高度。
+垂直高度仍由气压计约束。
+
+当前默认使用 corrected AI_IMU，不切换到 raw：
+
+  ai_imu_velocity_input_topic=mavros/ai/imu_corrected
+  ai_imu_accel_correction_blend=1.0
+  ai_imu_gyro_correction_blend=0.0
+  ai_imu_velocity_calibrate_world_bias=false
+
+水平速度协方差下限为 0.25，垂直速度协方差下限为 100。
+世界系加速度低通残差默认关闭，避免把真实小加速度当成 bias 抵消。
+PX4 姿态默认在接管后持续对齐；仅在校验陀螺传播时才冻结姿态。
+
+成功接管后应看到：
+
+  AI velocity validation passed
+  AI failover committed
+  AI velocity output source: corrected
+  rate 约 30-40 Hz
+
+AI_IMU 没有独立水平位置观测，长时间运行时仍需检查：
+
+  cs_ev_vel
+  xy_valid
+  v_xy_valid
+  v_z_valid
+  estimator innovation
+
+当 AI 速度自身失效、停止发布或被 EKF2 拒绝时，
+PX4 的 invalid 和失效保护必须继续生效。
+
+
+十一、VIO 失效后的 SITL 行为
+----------------
+COM_POS_FS_HOLD 只在以下条件满足后锁存：
+  1. 飞机已经解锁。
+  2. 本地水平位置曾经有效。
+  3. 本地水平速度曾经有效。
+
+锁存后，即使 VIO 停止更新、协方差增长或惯性推算计时超过阈值，
+EKF2 的 xy_valid/v_xy_valid 与 Commander 的水平 invalid 标志仍保持有效。
+姿态和高度检查仍然独立生效。
+
+不要在起飞前执行：
+
+  failure vio off
+
+不要直接使用 vio_ai_ops.sh 菜单中的：
+
+  v
+
+菜单中的 v 只关闭 VIO，不会自动启用 AI 导航。
+
+如果起飞前关闭 VIO，尚未形成首次有效状态，而 AI 仍是：
+
+  navigation_enabled=False
+
+飞机会在约 3～4 秒后失去位置/速度有效性，并触发：
+
+  local_position_invalid=True
+  local_velocity_invalid=True
+  Failsafe: blind land
+
+如果飞机已经进入稳定 OFFBOARD，并且水平位置与速度曾经有效，
+测试模式会保持水平 invalid=False。此时必须人工监控估计漂移，
+并通过 AUTO.LAND 或正常降落结束测试。
+
+最近一次 SITL 验证：
+  VIO off 后持续观察 35 s
+  vehicle_local_position.xy_valid=True
+  vehicle_local_position.v_xy_valid=True
+  failsafe_flags.local_position_invalid=False
+  failsafe_flags.local_velocity_invalid=False
+
+水平 validity 锁存不保证姿态与动力正常。仿真中仍可能因为姿态发散、
+碰撞或其他健康检查触发单独的 failsafe。
+
+实机测试顺序：
+  1. 先完成无桨台架测试，确认 COM_POS_FS_HOLD=1 时首次有效后的标志锁存。
+  2. 完成 HIL 测试，确认 VIO 中断后 xy_valid/v_xy_valid 持续为 True。
+  3. 飞行测试使用低高度、系留、独立遥控急停、地理围栏和人工观察员。
+  4. 测试期间监控 EPH、EVH、真实位置偏差和电池；漂移超限立即人工接管降落。
+  5. 不把该参数当作生产导航功能，也不依赖 invalid 标志检测 VIO 丢失。
+
+
+十二、降落和结束测试
+--------------------
+推荐通过轨迹服务器降落：
+
+  ros2 topic pub --once /drone0/traj_server/command \
+    gestelt_msgs/msg/Command "{command: 1}"
+
+也可以直接请求 AUTO.LAND：
+
+  ros2 service call /drone0/mavros/set_mode \
+    mavros_msgs/srv/SetMode \
+    "{base_mode: 0, custom_mode: 'AUTO.LAND'}"
+
+等待：
+
+  Landing detected
+  Disarmed by landing
+
+然后按 Ctrl+C 停止 Gestelt/MAVROS。
+
+最后按 Ctrl+C 停止 PX4/Gazebo。
+
+测试结束后检查没有残留进程：
+
+  pgrep -af 'px4|gzserver|gazebo|mavros'
+
+下一次测试前必须清理旧实例，避免复用旧 Gazebo/VIO 状态。
+
+
+十三、常见问题
+--------------
+1. Preflight Fail: system power unavailable
+
+检查：
+
+  param show CBRK_SUPPLY_CHK
+
+本地 PX4 v1.14 SITL 应为：
+
+  CBRK_SUPPLY_CHK=894281
+
+设置：
+
+  param set CBRK_SUPPLY_CHK 894281
+  param save
+  commander check
+
+
+2. Setting arm to 1 failed
+
+执行：
+
+  commander check
+  commander status
+
+如果 MAVROS 返回 result=1，含义是暂时拒绝 arm。
+必须根据 commander 输出修复，不要反复盲目重试。
+
+
+3. 起飞后几秒自动下降或 blind land
+
+首先检查是否有人执行了：
+
+  failure vio off
+
+同时检查 AI 节点：
+
+  navigation_enabled=False
+  rate=0.0 Hz
+
+如果 VIO 已关闭而 AI 未启用，EKF 没有水平位置/速度观测，
+必然会进入 blind land。
+
+正确流程：
+  先使用 VIO 起飞和悬停。
+  再运行 ai_failover.py。
+
+
+4. cs_ev_pos/cs_ev_vel 为 False
+
+依次检查：
+
+  listener vehicle_visual_odometry -n 1
+  ros2 topic hz /drone0/mavros/local_position/odom
+  param show EKF2_EV_CTRL
+  param show EKF2_GPS_CTRL
+  param show EKF2_HGT_REF
+
+没有持续 VIO 数据时不得起飞。
+
+
+5. AI 接管后漂移或 EKF 被拉偏
+
+重点检查：
+  - AI 速度轴方向是否正确
+  - MAVROS 时间戳是否连续
+  - AI_IMU 是否出现大量 IMU gap
+  - estimator_innovations 中的 ev_hvel 和 test_ratio
+  - 是否同时存在两个 /mavros/odometry/out 发布者
+
+不要通过无限放宽 EKF innovation gate 来掩盖坐标或时间戳错误。
+
+
+6. 查看最近一次飞行日志
+
+  cd /home/cjc/ws_capstone/PX4-Autopilot
+
+  find build/px4_sitl_default/rootfs/log \
+    -type f -name '*.ulg' -printf '%T@ %p\n' | sort -n | tail
+
+  ulog_info <最新日志.ulg>
+  ulog_messages <最新日志.ulg>
+
+
+十四、安全限制
+--------------
+该方案是实验性的 VIO + AI 速度外部导航方案。
+
+AI 速度积分没有：
+  - 视觉回环
+  - GPS 绝对位置
+  - 长期零偏稳定性保证
+  - 绝对位置修正
+
+首次测试必须：
+  - 保持 VIO 正常起飞
+  - 在空中再执行原子接管
+  - 只观察短时间
+  - 随时准备主动降落
+

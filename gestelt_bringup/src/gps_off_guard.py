@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Force GPS off before AI velocity is used by EKF2."""
+"""Force GPS off for controlled AI_IMU or external-aiding experiments."""
 
 import rclpy
 from mavros_msgs.srv import CommandLong, ParamSetV2
@@ -152,7 +152,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

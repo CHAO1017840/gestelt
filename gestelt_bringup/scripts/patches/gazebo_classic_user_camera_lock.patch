@@ -1,0 +1,311 @@
+diff --git a/include/gazebo_user_camera_plugin.h b/include/gazebo_user_camera_plugin.h
+index add0619..ae783ae 100644
+--- a/include/gazebo_user_camera_plugin.h
++++ b/include/gazebo_user_camera_plugin.h
+@@ -41,8 +41,10 @@
+ #ifndef _USER_CAMERA_PLUGIN_H_
+ #define _USER_CAMERA_PLUGIN_H_
+ 
++#include <QPointer>
+ #include <gazebo/common/common.hh>
+ #include <gazebo/common/Plugin.hh>
++#include <gazebo/gui/GLWidget.hh>
+ #include <gazebo/gui/GuiPlugin.hh>
+ #ifndef Q_MOC_RUN  // See: https://bugreports.qt-project.org/browse/QTBUG-22829
+ #   if GAZEBO_MAJOR_VERSION >= 9
+@@ -65,10 +67,28 @@ namespace gazebo
+ 
+       private:
+         void OnUpdate();
++        void OnSelectedEntity(const std::string &_name,
++                              const std::string &_mode);
++        bool eventFilter(QObject *_watched, QEvent *_event) override;
++
++        void EnsureGlWidget();
++        void ParseLockedModels();
++        bool IsLockedVisual(const rendering::VisualPtr &_visual) const;
++        bool IsLockedName(const std::string &_name) const;
++        bool IsLockedAtPosition(const ignition::math::Vector2i &_position) const;
++        void ForwardReleaseToCamera(const QMouseEvent *_event);
++        void ClearLockedSelection();
+ 
+         transport::NodePtr node;
+         event::ConnectionPtr update_connection_;
++        event::ConnectionPtr selection_connection_;
+         std::string model_name_{""};
++        std::vector<std::string> locked_models_;
++        QPointer<gui::GLWidget> gl_widget_;
++        bool locked_mouse_press_{false};
++        bool locked_mouse_dragged_{false};
++        int press_x_{0};
++        int press_y_{0};
+     };
+ }
+ #endif
+diff --git a/src/gazebo_user_camera_plugin.cpp b/src/gazebo_user_camera_plugin.cpp
+index 3e4f79c..6d974be 100644
+--- a/src/gazebo_user_camera_plugin.cpp
++++ b/src/gazebo_user_camera_plugin.cpp
+@@ -39,14 +39,49 @@
+  */
+ 
+ #include <sstream>
++#include <QApplication>
++#include <QEvent>
++#include <QKeyEvent>
++#include <QMouseEvent>
++#include <QTimer>
++#include <gazebo/common/Events.hh>
++#include <gazebo/common/MouseEvent.hh>
+ #include <gazebo/msgs/msgs.hh>
+ #include <gazebo/gui/GuiIface.hh>
++#include <gazebo/gui/MainWindow.hh>
+ #include <gazebo/rendering/rendering.hh>
+ #include "Int32.pb.h"
+ #include "gazebo_user_camera_plugin.h"
+ 
+ using namespace gazebo;
+ 
++namespace
++{
++std::string Trim(const std::string &_value)
++{
++  const std::size_t begin = _value.find_first_not_of(" \t\r\n");
++  if (begin == std::string::npos)
++    return "";
++  const std::size_t end = _value.find_last_not_of(" \t\r\n");
++  return _value.substr(begin, end - begin + 1);
++}
++
++common::MouseEvent::MouseButton ToMouseButton(const Qt::MouseButton _button)
++{
++  switch (_button)
++  {
++    case Qt::LeftButton:
++      return common::MouseEvent::LEFT;
++    case Qt::RightButton:
++      return common::MouseEvent::RIGHT;
++    case Qt::MiddleButton:
++      return common::MouseEvent::MIDDLE;
++    default:
++      return common::MouseEvent::NO_BUTTON;
++  }
++}
++}
++
+ GZ_REGISTER_GUI_PLUGIN(UserCameraPlugin)
+ 
+ UserCameraPlugin::UserCameraPlugin()
+@@ -58,9 +93,14 @@ UserCameraPlugin::UserCameraPlugin()
+   this->node = transport::NodePtr(new transport::Node());
+   this->node->Init();
+ 
++  this->ParseLockedModels();
++
+   update_connection_ =
+       event::Events::ConnectPreRender(
+           boost::bind(&UserCameraPlugin::OnUpdate, this));
++  selection_connection_ =
++      event::Events::ConnectSetSelectedEntity(
++          boost::bind(&UserCameraPlugin::OnSelectedEntity, this, _1, _2));
+ 
+   const char *model = std::getenv("PX4_SIM_MODEL");
+   if (model) {
+@@ -80,9 +120,197 @@ UserCameraPlugin::UserCameraPlugin()
+ /////////////////////////////////////////////////
+ UserCameraPlugin::~UserCameraPlugin()
+ {
++  if (this->gl_widget_)
++    this->gl_widget_->removeEventFilter(this);
+ }
+ 
++/////////////////////////////////////////////////
++void UserCameraPlugin::ParseLockedModels()
++{
++  const char *lockedModels = std::getenv("PX4_GUI_LOCK_MODELS");
++  if (!lockedModels)
++    return;
++
++  std::stringstream stream(lockedModels);
++  std::string entry;
++  while (std::getline(stream, entry, ','))
++  {
++    entry = Trim(entry);
++    if (entry.empty())
++      continue;
++
++    while (!entry.empty() &&
++           (entry.front() == '/' || entry.front() == '\\'))
++      entry.erase(entry.begin());
++    if (!entry.empty())
++      this->locked_models_.push_back(entry);
++  }
++
++  if (!this->locked_models_.empty())
++  {
++    gzmsg << "[UserCameraPlugin] GUI models are read-only:";
++    for (const auto &lockedModel : this->locked_models_)
++      gzmsg << " " << lockedModel;
++    gzmsg << std::endl;
++  }
++}
++
++/////////////////////////////////////////////////
++void UserCameraPlugin::EnsureGlWidget()
++{
++  if (this->gl_widget_ || this->locked_models_.empty())
++    return;
++
++  gui::MainWindow *mainWindow = gui::get_main_window();
++  if (!mainWindow)
++    return;
++
++  this->gl_widget_ = mainWindow->findChild<gui::GLWidget *>();
++  if (this->gl_widget_)
++  {
++    this->gl_widget_->installEventFilter(this);
++    gzmsg << "[UserCameraPlugin] Mouse editing lock installed for "
++          << this->locked_models_.size() << " model(s)" << std::endl;
++  }
++}
++
++/////////////////////////////////////////////////
++bool UserCameraPlugin::IsLockedName(const std::string &_name) const
++{
++  std::string name = _name;
++  const std::string world = gui::get_world();
++  if (!world.empty() && name.compare(0, world.size() + 2, world + "::") == 0)
++    name.erase(0, world.size() + 2);
++  while (!name.empty() && (name.front() == '/' || name.front() == '\\'))
++    name.erase(name.begin());
++
++  for (const auto &lockedModel : this->locked_models_)
++  {
++    if (name == lockedModel)
++      return true;
++    if (name.compare(0, lockedModel.size() + 2, lockedModel + "::") == 0)
++      return true;
++  }
++  return false;
++}
++
++/////////////////////////////////////////////////
++bool UserCameraPlugin::IsLockedVisual(
++    const rendering::VisualPtr &_visual) const
++{
++  if (!_visual)
++    return false;
++
++  const rendering::VisualPtr root = _visual->GetRootVisual();
++  return this->IsLockedName(_visual->Name()) ||
++         (root && this->IsLockedName(root->Name()));
++}
++
++/////////////////////////////////////////////////
++bool UserCameraPlugin::IsLockedAtPosition(
++    const ignition::math::Vector2i &_position) const
++{
++  const rendering::UserCameraPtr camera = gui::get_active_camera();
++  return camera && this->IsLockedVisual(camera->Visual(_position));
++}
++
++/////////////////////////////////////////////////
++bool UserCameraPlugin::eventFilter(QObject *_watched, QEvent *_event)
++{
++  if (!this->gl_widget_ || _watched != this->gl_widget_.data())
++    return GUIPlugin::eventFilter(_watched, _event);
++
++  if (_event->type() == QEvent::MouseButtonPress)
++  {
++    const auto *mouseEvent = static_cast<QMouseEvent *>(_event);
++    const ignition::math::Vector2i position(mouseEvent->pos().x(),
++                                             mouseEvent->pos().y());
++    this->locked_mouse_press_ = this->IsLockedAtPosition(position);
++    this->locked_mouse_dragged_ = false;
++    this->press_x_ = position.X();
++    this->press_y_ = position.Y();
++  }
++  else if (_event->type() == QEvent::MouseMove && this->locked_mouse_press_)
++  {
++    const auto *mouseEvent = static_cast<QMouseEvent *>(_event);
++    if (mouseEvent->buttons() != Qt::NoButton &&
++        (mouseEvent->pos().x() != this->press_x_ ||
++         mouseEvent->pos().y() != this->press_y_))
++    {
++      this->locked_mouse_dragged_ = true;
++    }
++  }
++  else if (_event->type() == QEvent::MouseButtonRelease &&
++           this->locked_mouse_press_)
++  {
++    const bool blockSelection =
++        !this->locked_mouse_dragged_ &&
++        this->IsLockedAtPosition(
++            ignition::math::Vector2i(this->press_x_, this->press_y_));
++    this->locked_mouse_press_ = false;
++    this->locked_mouse_dragged_ = false;
++
++    if (blockSelection)
++    {
++      const auto *mouseEvent = static_cast<QMouseEvent *>(_event);
++      this->ForwardReleaseToCamera(mouseEvent);
++      gzmsg << "[UserCameraPlugin] Ignored read-only model click"
++            << std::endl;
++      return true;
++    }
++  }
++
++  return GUIPlugin::eventFilter(_watched, _event);
++}
++
++/////////////////////////////////////////////////
++void UserCameraPlugin::ForwardReleaseToCamera(const QMouseEvent *_event)
++{
++  const rendering::UserCameraPtr camera = gui::get_active_camera();
++  if (!camera)
++    return;
++
++  common::MouseEvent mouseEvent;
++  mouseEvent.SetPos(_event->pos().x(), _event->pos().y());
++  mouseEvent.SetPrevPos(_event->pos().x(), _event->pos().y());
++  mouseEvent.SetPressPos(this->press_x_, this->press_y_);
++  mouseEvent.SetButton(ToMouseButton(_event->button()));
++  mouseEvent.SetButtons(common::MouseEvent::NO_BUTTON);
++  mouseEvent.SetType(common::MouseEvent::RELEASE);
++  mouseEvent.SetDragging(false);
++  mouseEvent.SetShift((_event->modifiers() & Qt::ShiftModifier) != 0);
++  mouseEvent.SetControl((_event->modifiers() & Qt::ControlModifier) != 0);
++  mouseEvent.SetAlt((_event->modifiers() & Qt::AltModifier) != 0);
++  camera->HandleMouseEvent(mouseEvent);
++}
++
++/////////////////////////////////////////////////
++void UserCameraPlugin::OnSelectedEntity(const std::string &_name,
++                                        const std::string & /*_mode*/)
++{
++  if (!this->IsLockedName(_name))
++    return;
++
++  QTimer::singleShot(0, this, [this]()
++  {
++    this->ClearLockedSelection();
++  });
++}
++
++/////////////////////////////////////////////////
++void UserCameraPlugin::ClearLockedSelection()
++{
++  if (!this->gl_widget_)
++    return;
++
++  this->gl_widget_->setFocus(Qt::OtherFocusReason);
++  QKeyEvent escapeEvent(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
++  QApplication::sendEvent(this->gl_widget_, &escapeEvent);
++}
++
++/////////////////////////////////////////////////
+ void UserCameraPlugin::OnUpdate() {
++  this->EnsureGlWidget();
+ 
+   rendering::UserCameraPtr user_camera = gui::get_active_camera();
+ 

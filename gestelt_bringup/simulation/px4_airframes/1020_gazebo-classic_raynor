@@ -33,12 +33,16 @@ param set-default PWM_MAIN_FUNC2 102
 param set-default PWM_MAIN_FUNC3 103
 param set-default PWM_MAIN_FUNC4 104
 
-# EKF2: external vision position and velocity, no GPS
+# EKF2: fuse VIO position and velocity while healthy. AI IMU velocity is not
+# used. This test airframe keeps horizontal validity latched after the first
+# valid armed state for failure-response testing.
 param set-default EKF2_EV_DELAY 5
-param set-default EKF2_EV_CTRL 15
+param set-default EKF2_EV_CTRL 7
 param set-default EKF2_HGT_REF 0
 param set-default EKF2_GPS_CTRL 0
 param set-default ATT_EXT_HDG_M 1
+param set-default COM_POS_FS_EVV 0
+param set-default COM_POS_FS_HOLD 1
 
 # Attitude PID parameters intentionally come from the local PX4 parameter
 # store so this airframe does not overwrite the user's tuned values.
