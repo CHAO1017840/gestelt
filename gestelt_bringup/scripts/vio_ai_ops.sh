@@ -55,6 +55,9 @@ run_hover_only() {
         tmux send-keys -t "$SESSION:$AI_PANE" "$status_cmd" C-m
         echo "[ops] 状态监视器在右下 AI 窗格中运行"
     fi
+    echo "[ops] HOVER 后等待 5 秒并自动注入 VIO failure"
+    python3 "$SCRIPT_DIR/inject_vio_failure.py" \
+        --ros-args -p delay_after_hover:=5.0
 }
 
 vio_fail() {
@@ -69,10 +72,13 @@ cat <<EOF
   listener estimator_status_flags
       期望: cs_gps=False  cs_ev_vel=True
             起飞前 EKF2_EV_CTRL=7, VIO 正常融合位置和速度
+  listener airimu_correction
+      期望: valid=True, acceleration/rate offset 持续更新
   listener vehicle_local_position
       期望: xy_valid=True  v_xy_valid=True  dead_reckoning=False
 在任意终端:
-  ros2 topic hz /drone0/mavros/ai/imu_corrected  (约 30-40 Hz)
+  ros2 topic hz /drone0/mavros/ai/imu_corrected  (约 200 Hz)
+  ros2 topic hz /drone0/mavros/hil/imu_ned       (约 200 Hz)
   ros2 topic echo --once /drone0/mavros/state  (armed: false)
   AI_IMU 速度积分和 ODOMETRY 接管默认禁用
   测试模式使用 COM_POS_FS_HOLD=1:

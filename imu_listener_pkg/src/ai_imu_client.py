@@ -12,6 +12,8 @@ import numpy as np
 import rclpy
 from ai_msgs.msg import ImuNoise
 from ament_index_python.packages import get_package_share_directory
+from geometry_msgs.msg import Vector3
+from mavros_msgs.msg import HilSensor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
@@ -85,11 +87,15 @@ class AiImuClient(Node):
             "corrected_imu_topic", "mavros/ai/imu_corrected"
         )
         self.declare_parameter("publish_corrected_imu", True)
+        self.declare_parameter("publish_px4_correction", False)
+        self.declare_parameter(
+            "px4_correction_topic", "mavros/hil/imu_ned"
+        )
         self.declare_parameter("model_path", "")
         self.declare_parameter("buffer_size", 200)
         self.declare_parameter("target_imu_hz", 200.0)
         self.declare_parameter("minimum_input_hz", 180.0)
-        self.declare_parameter("inference_stride", 5)
+        self.declare_parameter("inference_stride", 1)
         self.declare_parameter("inference_threads", 1)
         self.declare_parameter("interpolate", True)
         self.declare_parameter("max_interpolation_gap", 0.05)
@@ -116,6 +122,12 @@ class AiImuClient(Node):
         self.publish_corrected_imu = _as_bool(
             self.get_parameter("publish_corrected_imu").value
         )
+        self.publish_px4_correction = _as_bool(
+            self.get_parameter("publish_px4_correction").value
+        )
+        self.px4_correction_topic = str(
+            self.get_parameter("px4_correction_topic").value
+        ).strip()
         self.buffer_size = int(self.get_parameter("buffer_size").value)
         self.target_imu_hz = float(
             self.get_parameter("target_imu_hz").value
@@ -212,6 +224,12 @@ class AiImuClient(Node):
             self.corrected_imu_publisher = self.create_publisher(
                 Imu, self.corrected_imu_topic, 10
             )
+        self.px4_correction_publisher = None
+        self.correction_sequence = 0
+        if self.publish_px4_correction:
+            self.px4_correction_publisher = self.create_publisher(
+                HilSensor, self.px4_correction_topic, 10
+            )
         self.imu_subscription = self.create_subscription(
             Imu,
             self.imu_topic,
@@ -229,6 +247,10 @@ class AiImuClient(Node):
         if self.corrected_imu_publisher is not None:
             self.get_logger().info(
                 f"corrected_imu={self.corrected_imu_topic}"
+            )
+        if self.px4_correction_publisher is not None:
+            self.get_logger().info(
+                f"px4_imu_correction={self.px4_correction_topic}"
             )
         self.get_logger().info(
             f"interpolate={self.interpolate}, "
@@ -544,6 +566,8 @@ class AiImuClient(Node):
         return {
             "corrected_accel": corrected_accel,
             "corrected_gyro": corrected_gyro,
+            "accel_correction": corrected_accel - accel,
+            "gyro_correction": corrected_gyro - gyro,
             "accel_noise": accel_var,
             "gyro_noise": gyro_var,
             "inference_ms": inference_ms,
@@ -596,6 +620,27 @@ class AiImuClient(Node):
             )
         self.corrected_imu_publisher.publish(message)
 
+    def _publish_px4_correction(self, noise: dict):
+        if self.px4_correction_publisher is None:
+            return
+
+        correction = HilSensor()
+        correction.header = noise["header"]
+        correction.acc = Vector3(
+            x=float(noise["accel_correction"][0]),
+            y=float(noise["accel_correction"][1]),
+            z=float(noise["accel_correction"][2]),
+        )
+        correction.gyro = Vector3(
+            x=float(noise["gyro_correction"][0]),
+            y=float(noise["gyro_correction"][1]),
+            z=float(noise["gyro_correction"][2]),
+        )
+        # ACCEL (0b000111) and GYRO (0b111000) only.
+        correction.fields_updated = 0b111111
+        self.px4_correction_publisher.publish(correction)
+        self.correction_sequence += 1
+
     def _drain_queue(self):
         while self.process_queue:
             sample = self.process_queue.popleft()
@@ -610,6 +655,7 @@ class AiImuClient(Node):
             if noise is not None:
                 self._publish_noise(noise)
                 self._publish_corrected_imu(noise)
+                self._publish_px4_correction(noise)
                 self.stats["samples_processed"] += 1
 
     def _log_statistics(self):

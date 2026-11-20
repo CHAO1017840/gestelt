@@ -13,7 +13,8 @@ install(PROGRAMS scripts/base_station.sh scripts/debug_plan.sh scripts/offboard.
   scripts/scenario.sh scripts/scenario_hitl_base.sh scripts/scenario_hitl_drone.sh
   scripts/scenario_sitl_drone.sh scripts/sitl_single_drone.sh
   scripts/install_raynor_sitl.sh scripts/apply_px4_patches.sh
-  scripts/hover_only.py scripts/status_monitor.py
+  scripts/hover_only.py scripts/status_monitor.py scripts/collect_ulog.py
+  scripts/inject_vio_failure.py
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY scripts/patches DESTINATION lib/${PROJECT_NAME})

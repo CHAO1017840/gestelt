@@ -1,0 +1,298 @@
+diff --git a/msg/AirimuCorrection.msg b/msg/AirimuCorrection.msg
+new file mode 100644
+index 0000000000..70ebf49e9a
+--- /dev/null
++++ b/msg/AirimuCorrection.msg
+@@ -0,0 +1,8 @@
++uint64 timestamp
++uint64 timestamp_sample
++uint32 sequence
++
++float32[3] acceleration_offset
++float32[3] angular_velocity_offset
++
++bool valid
+diff --git a/msg/CMakeLists.txt b/msg/CMakeLists.txt
+index 826f1cb6ab..f459b150d3 100644
+--- a/msg/CMakeLists.txt
++++ b/msg/CMakeLists.txt
+@@ -49,6 +49,7 @@ set(msg_files
+ 	Airspeed.msg
+ 	AirspeedValidated.msg
+ 	AirspeedWind.msg
++	AirimuCorrection.msg
+ 	ArmingCheckReply.msg
+ 	ArmingCheckRequest.msg
+ 	AutotuneAttitudeControlStatus.msg
+diff --git a/src/modules/ekf2/EKF2.cpp b/src/modules/ekf2/EKF2.cpp
+index 85551c70b1..363569244d 100644
+--- a/src/modules/ekf2/EKF2.cpp
++++ b/src/modules/ekf2/EKF2.cpp
+@@ -698,6 +698,32 @@ void EKF2::Run()
+ 	}
+ 
+ 	if (imu_updated) {
++		if (_param_ekf2_airimu_en.get()) {
++			airimu_correction_s correction;
++
++			if (_airimu_correction_sub.copy(&correction)
++			    && correction.valid
++			    && (hrt_elapsed_time(&correction.timestamp) < _param_ekf2_airimu_tout.get() * 1_ms)) {
++
++				const Vector3f acceleration_offset{correction.acceleration_offset};
++				const Vector3f angular_velocity_offset{correction.angular_velocity_offset};
++
++				if (acceleration_offset.isAllFinite()
++				    && angular_velocity_offset.isAllFinite()
++				    && (acceleration_offset.norm() <= _param_ekf2_airimu_acc_max.get())
++				    && (angular_velocity_offset.norm() <= _param_ekf2_airimu_gyro_max.get())) {
++
++					imu_sample_new.delta_vel += acceleration_offset * imu_sample_new.delta_vel_dt;
++					imu_sample_new.delta_ang += angular_velocity_offset * imu_sample_new.delta_ang_dt;
++
++					if (!_airimu_correction_applied_warned) {
++						PX4_INFO("AirIMU correction applied to EKF2 IMU input");
++						_airimu_correction_applied_warned = true;
++					}
++				}
++			}
++		}
++
+ 		const hrt_abstime now = imu_sample_new.time_us;
+ 
+ 		// push imu data into estimator
+diff --git a/src/modules/ekf2/EKF2.hpp b/src/modules/ekf2/EKF2.hpp
+index e5490f1cb0..a32cd80c8f 100644
+--- a/src/modules/ekf2/EKF2.hpp
++++ b/src/modules/ekf2/EKF2.hpp
+@@ -64,6 +64,7 @@
+ #include <uORB/Subscription.hpp>
+ #include <uORB/SubscriptionCallback.hpp>
+ #include <uORB/SubscriptionMultiArray.hpp>
++#include <uORB/topics/airimu_correction.h>
+ #include <uORB/topics/ekf2_timestamps.h>
+ #include <uORB/topics/estimator_bias.h>
+ #include <uORB/topics/estimator_bias3d.h>
+@@ -419,6 +420,7 @@ private:
+ 
+ 	uORB::SubscriptionCallbackWorkItem _sensor_combined_sub{this, ORB_ID(sensor_combined)};
+ 	uORB::SubscriptionCallbackWorkItem _vehicle_imu_sub{this, ORB_ID(vehicle_imu)};
++	uORB::Subscription _airimu_correction_sub{ORB_ID(airimu_correction)};
+ 
+ #if defined(CONFIG_EKF2_RANGE_FINDER)
+ 	hrt_abstime _status_rng_hgt_pub_last {0};
+@@ -445,6 +447,7 @@ private:
+ 
+ 	bool _test_hold_position_valid{false};
+ 	bool _test_hold_valid_warned{false};
++	bool _airimu_correction_applied_warned{false};
+ 
+ 	uint32_t _filter_control_status_changes{0};
+ 	uint32_t _filter_fault_status_changes{0};
+@@ -637,6 +640,10 @@ private:
+ 		(ParamExtInt<px4::params::EKF2_NOAID_TOUT>)
+ 		_param_ekf2_noaid_tout,	///< maximum lapsed time from last fusion of measurements that constrain drift before the EKF will report the horizontal nav solution invalid (uSec)
+ 		(ParamBool<px4::params::COM_POS_FS_HOLD>) _param_com_pos_fs_hold,
++		(ParamBool<px4::params::EKF2_AIRIMU_EN>) _param_ekf2_airimu_en,
++		(ParamInt<px4::params::EKF2_AIRIMU_TOUT>) _param_ekf2_airimu_tout,
++		(ParamFloat<px4::params::EKF2_AIMU_ACC>) _param_ekf2_airimu_acc_max,
++		(ParamFloat<px4::params::EKF2_AIMU_GYR>) _param_ekf2_airimu_gyro_max,
+ 
+ #if defined(CONFIG_EKF2_TERRAIN) || defined(CONFIG_EKF2_OPTICAL_FLOW) || defined(CONFIG_EKF2_RANGE_FINDER)
+ 		(ParamExtFloat<px4::params::EKF2_MIN_RNG>) _param_ekf2_min_rng,
+diff --git a/src/modules/ekf2/ekf2_params.c b/src/modules/ekf2/ekf2_params.c
+index e275308824..f327e2870b 100644
+--- a/src/modules/ekf2/ekf2_params.c
++++ b/src/modules/ekf2/ekf2_params.c
+@@ -1537,3 +1537,54 @@ PARAM_DEFINE_INT32(EKF2_SYNT_MAG_Z, 0);
+  * @decimal 1
+  */
+ PARAM_DEFINE_FLOAT(EKF2_GSF_TAS, 15.0f);
++
++/**
++ * Enable AirIMU IMU correction input.
++ *
++ * Apply bounded acceleration and angular-rate offsets received from the
++ * MAVLink airimu_correction topic to the EKF2 IMU increments. If corrections
++ * are invalid or stale, EKF2 continues using the uncorrected IMU.
++ *
++ * @group EKF2
++ * @boolean
++ */
++PARAM_DEFINE_INT32(EKF2_AIRIMU_EN, 0);
++
++/**
++ * AirIMU correction timeout.
++ *
++ * Maximum age of an AirIMU correction before EKF2 falls back to the
++ * uncorrected IMU.
++ *
++ * @group EKF2
++ * @min 5
++ * @max 1000
++ * @unit ms
++ */
++PARAM_DEFINE_INT32(EKF2_AIRIMU_TOUT, 100);
++
++/**
++ * Maximum AirIMU acceleration correction.
++ *
++ * Corrections larger than this magnitude are rejected.
++ *
++ * @group EKF2
++ * @min 0.1
++ * @max 10
++ * @unit m/s^2
++ * @decimal 2
++ */
++PARAM_DEFINE_FLOAT(EKF2_AIMU_ACC, 2.0f);
++
++/**
++ * Maximum AirIMU angular-rate correction.
++ *
++ * Corrections larger than this magnitude are rejected.
++ *
++ * @group EKF2
++ * @min 0.01
++ * @max 2
++ * @unit rad/s
++ * @decimal 3
++ */
++PARAM_DEFINE_FLOAT(EKF2_AIMU_GYR, 0.2f);
+diff --git a/src/modules/logger/logged_topics.cpp b/src/modules/logger/logged_topics.cpp
+index cdcb36080d..f6b72ae59e 100644
+--- a/src/modules/logger/logged_topics.cpp
++++ b/src/modules/logger/logged_topics.cpp
+@@ -50,6 +50,7 @@ void LoggedTopics::add_default_topics()
+ 	add_optional_topic("actuator_controls_status_0", 300);
+ 	add_topic("airspeed", 1000);
+ 	add_optional_topic("airspeed_validated", 200);
++	add_topic("airimu_correction", 50);
+ 	add_optional_topic("autotune_attitude_control_status", 100);
+ 	add_optional_topic("camera_capture");
+ 	add_optional_topic("camera_trigger");
+diff --git a/src/modules/mavlink/mavlink_main.h b/src/modules/mavlink/mavlink_main.h
+index 1ba71c6a2b..298f052134 100644
+--- a/src/modules/mavlink/mavlink_main.h
++++ b/src/modules/mavlink/mavlink_main.h
+@@ -280,6 +280,8 @@ public:
+ 
+ 	bool			get_use_hil_gps() { return _param_mav_usehilgps.get(); }
+ 
++	bool			get_airimu_enabled() { return _param_mav_airimu_en.get(); }
++
+ 	bool			get_forward_externalsp() { return _param_mav_fwdextsp.get(); }
+ 
+ 	bool			get_flow_control_enabled() { return _flow_control_mode; }
+@@ -660,6 +662,7 @@ private:
+ 		(ParamInt<px4::params::MAV_SIK_RADIO_ID>) _param_sik_radio_id,
+ 		(ParamInt<px4::params::MAV_TYPE>) _param_mav_type,
+ 		(ParamBool<px4::params::MAV_USEHILGPS>) _param_mav_usehilgps,
++		(ParamBool<px4::params::MAV_AIRIMU_EN>) _param_mav_airimu_en,
+ 		(ParamBool<px4::params::MAV_FWDEXTSP>) _param_mav_fwdextsp,
+ 		(ParamBool<px4::params::MAV_HASH_CHK_EN>) _param_mav_hash_chk_en,
+ 		(ParamBool<px4::params::MAV_HB_FORW_EN>) _param_mav_hb_forw_en,
+diff --git a/src/modules/mavlink/mavlink_params.c b/src/modules/mavlink/mavlink_params.c
+index 8a793f5e5f..bda7349573 100644
+--- a/src/modules/mavlink/mavlink_params.c
++++ b/src/modules/mavlink/mavlink_params.c
+@@ -109,6 +109,19 @@ PARAM_DEFINE_INT32(MAV_TYPE, 0);
+  */
+ PARAM_DEFINE_INT32(MAV_USEHILGPS, 0);
+ 
++/**
++ * Accept AirIMU correction messages outside HIL mode.
++ *
++ * When enabled, an IMU-only HIL_SENSOR message received on this MAVLink link
++ * is interpreted as an AirIMU acceleration and angular-rate correction. It is
++ * published as airimu_correction for EKF2 instead of changing the vehicle to
++ * HIL mode or replacing the normal sensor drivers.
++ *
++ * @boolean
++ * @group MAVLink
++ */
++PARAM_DEFINE_INT32(MAV_AIRIMU_EN, 0);
++
+ /**
+  * Forward external setpoint messages
+  *
+diff --git a/src/modules/mavlink/mavlink_receiver.cpp b/src/modules/mavlink/mavlink_receiver.cpp
+index e0697f787a..fde901631b 100644
+--- a/src/modules/mavlink/mavlink_receiver.cpp
++++ b/src/modules/mavlink/mavlink_receiver.cpp
+@@ -354,6 +354,9 @@ MavlinkReceiver::handle_message(mavlink_message_t *msg)
+ 		default:
+ 			break;
+ 		}
++
++	} else if (_mavlink->get_airimu_enabled() && msg->msgid == MAVLINK_MSG_ID_HIL_SENSOR) {
++		handle_message_airimu_correction(msg);
+ 	}
+ 
+ 
+@@ -2231,6 +2234,37 @@ MavlinkReceiver::get_message_interval(int msgId)
+ 	mavlink_msg_message_interval_send(_mavlink->get_channel(), msgId, interval);
+ }
+ 
++void
++MavlinkReceiver::handle_message_airimu_correction(mavlink_message_t *msg)
++{
++	mavlink_hil_sensor_t correction;
++	mavlink_msg_hil_sensor_decode(msg, &correction);
++
++	constexpr uint32_t required_fields{0b111111};
++
++	if ((correction.fields_updated & required_fields) != required_fields) {
++		return;
++	}
++
++	const hrt_abstime now = hrt_absolute_time();
++	const hrt_abstime message_time = correction.time_usec;
++
++	airimu_correction_s report{};
++	report.timestamp = now;
++	report.timestamp_sample =
++		(message_time > 0 && message_time <= now + 1_s && message_time + 1_s >= now) ? message_time : now;
++	report.sequence = msg->seq;
++	report.acceleration_offset[0] = correction.xacc;
++	report.acceleration_offset[1] = correction.yacc;
++	report.acceleration_offset[2] = correction.zacc;
++	report.angular_velocity_offset[0] = correction.xgyro;
++	report.angular_velocity_offset[1] = correction.ygyro;
++	report.angular_velocity_offset[2] = correction.zgyro;
++	report.valid = true;
++
++	_airimu_correction_pub.publish(report);
++}
++
+ void
+ MavlinkReceiver::handle_message_hil_sensor(mavlink_message_t *msg)
+ {
+diff --git a/src/modules/mavlink/mavlink_receiver.h b/src/modules/mavlink/mavlink_receiver.h
+index 7939e813ae..314852b33c 100644
+--- a/src/modules/mavlink/mavlink_receiver.h
++++ b/src/modules/mavlink/mavlink_receiver.h
+@@ -63,6 +63,7 @@
+ #include <uORB/topics/actuator_armed.h>
+ #include <uORB/topics/actuator_outputs.h>
+ #include <uORB/topics/airspeed.h>
++#include <uORB/topics/airimu_correction.h>
+ #include <uORB/topics/autotune_attitude_control_status.h>
+ #include <uORB/topics/battery_status.h>
+ #include <uORB/topics/camera_status.h>
+@@ -173,6 +174,7 @@ private:
+ 	void handle_message_hil_optical_flow(mavlink_message_t *msg);
+ 	void handle_message_hil_sensor(mavlink_message_t *msg);
+ 	void handle_message_hil_state_quaternion(mavlink_message_t *msg);
++	void handle_message_airimu_correction(mavlink_message_t *msg);
+ 	void handle_message_landing_target(mavlink_message_t *msg);
+ 	void handle_message_logging_ack(mavlink_message_t *msg);
+ 	void handle_message_manual_control(mavlink_message_t *msg);
+@@ -288,6 +290,7 @@ private:
+ 
+ 	// ORB publications
+ 	uORB::Publication<airspeed_s>				_airspeed_pub{ORB_ID(airspeed)};
++	uORB::Publication<airimu_correction_s>			_airimu_correction_pub{ORB_ID(airimu_correction)};
+ 	uORB::Publication<battery_status_s>			_battery_pub{ORB_ID(battery_status)};
+ 	uORB::Publication<camera_status_s>			_camera_status_pub{ORB_ID(camera_status)};
+ 	uORB::Publication<cellular_status_s>			_cellular_status_pub{ORB_ID(cellular_status)};

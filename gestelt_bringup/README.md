@@ -24,7 +24,14 @@ ros2 launch gestelt_bringup rmuc2025_hover.launch.py
 ```
 
 This starts PX4 SITL, Gazebo, MAVROS, AI_IMU, RMUC navigation, automatic
-takeoff/HOVER and the terminal status monitor.
+takeoff/HOVER and the terminal status monitor. Five seconds after HOVER it
+injects a VIO sensor failure. Disable that with
+`inject_vio_failure:=false`, or change the delay with
+`vio_failure_delay_after_hover:=10.0`.
+
+The launch also copies the PX4 SITL `.ulg` log to `output/ulog` after the file
+is complete. Upload that file to <https://review.px4.io/> for Flight Review.
+Set `collect_ulog:=false` to disable collection.
 
 Use `-m` for automatic mission startup, or `-H` to explicitly select the
 hover-only mode.
@@ -51,9 +58,11 @@ by `(x=3, y=-12) m`, so the prepared PCD bounds are
 `x=[-4.518, 10.518]`, `y=[-26.018, 2.018]`. The RMUC field and ground models are
 read-only in the Gazebo GUI; the mouse can still orbit, pan and zoom the camera.
 
-`install_raynor_sitl.sh` also applies the versioned PX4 validity-hold and Gazebo
-GUI model-lock patches from `scripts/patches`. Reapplying the installer is
-idempotent.
+`install_raynor_sitl.sh` also applies the versioned PX4 validity-hold,
+AirIMU MAVLink input and Gazebo GUI model-lock patches from `scripts/patches`.
+Reapplying the installer is idempotent. The AirIMU path sends acceleration and
+rate offsets through MAVROS `hil/imu_ned`; PX4 accepts them only with
+`MAV_AIRIMU_EN=1` and applies them to EKF2 with `EKF2_AIRIMU_EN=1`.
 
 The XML launch files below are retained as ROS 1 reference material. The ROS 2
 launch file dynamically creates namespaced nodes for every drone.

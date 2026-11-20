@@ -17,6 +17,17 @@ apply_one() {
     echo "Applied ${label}: ${patch_file}"
   elif git -C "${repo}" apply --reverse --check "${patch_file}" >/dev/null 2>&1; then
     echo "Already applied ${label}: ${patch_file}"
+  elif [ "${label}" = "PX4 validity-hold patch" ] \
+    && rg -q "Test EKF2 horizontal valid output hold active" \
+      "${repo}/src/modules/ekf2/EKF2.cpp" \
+    && rg -q "COM_POS_FS_HOLD" \
+      "${repo}/src/modules/commander/HealthAndArmingChecks/checks/estimatorCheck.hpp"; then
+    echo "Already applied (updated source tree): ${label}"
+  elif [ "${label}" = "PX4 AirIMU MAVLink patch" ] \
+    && rg -q "AirIMU correction applied to EKF2 IMU input" \
+      "${repo}/src/modules/ekf2/EKF2.cpp" \
+    && test -f "${repo}/msg/AirimuCorrection.msg"; then
+    echo "Already applied (updated source tree): ${label}"
   else
     echo "Cannot apply ${label}: ${patch_file}" >&2
     echo "The PX4 checkout is not at the expected v1.14 base or has conflicting edits." >&2
@@ -38,6 +49,11 @@ apply_one \
   "${PX4_DIR}" \
   "${PATCH_DIR}/px4_core_validity_hold.patch" \
   "PX4 validity-hold patch"
+
+apply_one \
+  "${PX4_DIR}" \
+  "${PATCH_DIR}/px4_airimu_mavlink.patch" \
+  "PX4 AirIMU MAVLink patch"
 
 apply_one \
   "${SITL_DIR}" \

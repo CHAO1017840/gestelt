@@ -3,6 +3,7 @@ logs/
 build/
 install/
 log/
+/output/ulog/
 __pycache__/
 *.py[cod]
 bin/

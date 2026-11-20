@@ -246,6 +246,9 @@ def launch_setup(context, *args, **kwargs):
                 "corrected_imu_topic": LaunchConfiguration(
                     "ai_imu_corrected_topic"
                 ),
+                "publish_px4_correction": LaunchConfiguration(
+                    "ai_imu_publish_px4_correction"
+                ),
                 "model_path": LaunchConfiguration("ai_imu_model_path"),
                 "buffer_size": LaunchConfiguration("ai_imu_buffer_size"),
                 "target_imu_hz": LaunchConfiguration("ai_imu_target_hz"),
@@ -676,6 +679,14 @@ def generate_launch_description():
             description="Relative corrected sensor_msgs/Imu topic.",
         ),
         DeclareLaunchArgument(
+            "ai_imu_publish_px4_correction",
+            default_value="false",
+            description=(
+                "Send AirIMU acceleration/rate offsets through the MAVROS HIL "
+                "plugin for PX4 EKF2 ingestion."
+            ),
+        ),
+        DeclareLaunchArgument(
             "ai_imu_model_path",
             default_value="",
             description="ONNX model path; empty selects the packaged model.",
@@ -708,8 +719,11 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "ai_imu_inference_stride",
-            default_value="5",
-            description="Infer once per N native IMU samples.",
+            default_value="1",
+            description=(
+                "Infer once per N native IMU samples. The default preserves "
+                "the native AirIMU output rate."
+            ),
         ),
         DeclareLaunchArgument(
             "ai_imu_inference_threads",

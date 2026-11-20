@@ -73,11 +73,11 @@ that native rate on the offboard MAVLink link:
 mavlink stream -r 250 -s HIGHRES_IMU -u $udp_offboard_port_local
 ```
 
-The client resamples this real 250 Hz stream to the AirIMU model rate of
-200 Hz. It must not be used to inflate a 50 Hz source with interpolation.
-With `inference_stride:=5`, corrected IMU output is approximately 40 Hz while
-every model window still contains real 200 Hz samples. The client warns if the
-received stream falls below `minimum_input_hz:=180`.
+The client maintains the AirIMU model rate of 200 Hz. It must not be used to
+inflate a 50 Hz source with interpolation. The default
+`inference_stride:=1` runs one inference per native sample and preserves the
+200 Hz corrected IMU output rate. The client warns if the received stream
+falls below `minimum_input_hz:=180`.
 
 The default `remap_mavros_axes:=true` applies the original Radxa client's
 `[z, -y, x]` model-axis mapping. Set it to `false` when the input IMU is
@@ -98,7 +98,8 @@ rather than a property that can be recovered from the model alone.
 ## AI_IMU use without velocity estimation
 
 The corrected AI IMU stream is retained for inference, correction and
-diagnostic inspection. It is not integrated into a navigation velocity.
+diagnostic inspection. It is not integrated into an external navigation
+velocity.
 
 The SITL evaluation showed substantial drift when corrected acceleration was
 integrated and returned to EKF2 as external velocity. The estimator therefore
@@ -141,8 +142,29 @@ The supported output for data inspection is:
 /drone0/mavros/ai/imu_corrected
 ```
 
-The full AI correction path remains useful as a measurement-correction
-research path. A future navigation implementation must inject the correction
-before EKF2 propagation or include a complete independent state and
-cross-correlation model. It must not publish integrated AI IMU velocity as if
-it were an independent external observation.
+## Direct PX4 EKF2 IMU correction
+
+When `publish_px4_correction:=true`, the client also publishes the
+acceleration and angular-rate offsets on:
+
+```text
+/drone0/mavros/hil/imu_ned
+```
+
+MAVROS sends these as IMU-only `HIL_SENSOR` messages. With
+`MAV_AIRIMU_EN=1`, PX4 accepts them outside HIL mode and publishes the
+`airimu_correction` uORB topic. It does not enter HIL mode or replace the
+normal sensor drivers. With `EKF2_AIRIMU_EN=1`, EKF2 applies the bounded
+offsets to each raw IMU delta angle and delta velocity:
+
+```text
+corrected_delta_angle    = raw_delta_angle    + rate_offset * dt
+corrected_delta_velocity = raw_delta_velocity + accel_offset * dt
+```
+
+The raw IMU remains the 200 Hz timing source. Corrections older than
+`EKF2_AIRIMU_TOUT` are ignored, and offsets above `EKF2_AIMU_ACC` or
+`EKF2_AIMU_GYR` are rejected.
+
+This corrects the EKF2 IMU input; it does not create an independent position
+measurement. Integrated IMU state can still drift when VIO is unavailable.

@@ -43,6 +43,12 @@ def _launch_setup(context, *args, **kwargs):
     status_script = (
         package_prefix / "lib/gestelt_bringup/status_monitor.py"
     )
+    ulog_script = (
+        package_prefix / "lib/gestelt_bringup/collect_ulog.py"
+    )
+    vio_failure_script = (
+        package_prefix / "lib/gestelt_bringup/inject_vio_failure.py"
+    )
 
     if not px4_dir.is_dir():
         raise RuntimeError(
@@ -52,6 +58,21 @@ def _launch_setup(context, *args, **kwargs):
     if not hover_script.is_file() or not status_script.is_file():
         raise RuntimeError(
             "Installed hover helpers are missing; rebuild gestelt_bringup"
+        )
+    if (
+        context.launch_configurations["collect_ulog"] == "true"
+        and not ulog_script.is_file()
+    ):
+        raise RuntimeError(
+            "Installed ULog collector is missing; rebuild gestelt_bringup"
+        )
+    if (
+        context.launch_configurations["inject_vio_failure"] == "true"
+        and not vio_failure_script.is_file()
+    ):
+        raise RuntimeError(
+            "Installed VIO failure injector is missing; "
+            "rebuild gestelt_bringup"
         )
 
     px4_env = os.environ.copy()
@@ -81,6 +102,31 @@ def _launch_setup(context, *args, **kwargs):
 
     status_env = os.environ.copy()
     status_env["PX4_LISTENER_BIN"] = str(listener)
+
+    completion_actions = []
+    if context.launch_configurations["collect_ulog"] == "true":
+        ulog_output_dir = Path(
+            context.launch_configurations["ulog_output_dir"]
+        ).expanduser()
+        completion_actions.append(
+            ExecuteProcess(
+                cmd=[
+                    str(ulog_script),
+                    "--log-root",
+                    str(
+                        px4_dir
+                        / "build/px4_sitl_default/rootfs/log"
+                    ),
+                    "--output-dir",
+                    str(ulog_output_dir),
+                ],
+                name="ulog_collector",
+                output="screen",
+                emulate_tty=True,
+                sigterm_timeout="40",
+                sigkill_timeout="5",
+            )
+        )
 
     px4_process = ExecuteProcess(
         cmd=[
@@ -121,6 +167,7 @@ def _launch_setup(context, *args, **kwargs):
             "ai_imu_axis_mapping": "x,y,z",
             "ai_imu_accel_correction_blend": "1.0",
             "ai_imu_gyro_correction_blend": "0.0",
+            "ai_imu_publish_px4_correction": "true",
             "enforce_gps_off": "true",
         }.items(),
     )
@@ -135,6 +182,23 @@ def _launch_setup(context, *args, **kwargs):
                 emulate_tty=True,
             )
         )
+        if context.launch_configurations["inject_vio_failure"] == "true":
+            delayed_helpers.append(
+                ExecuteProcess(
+                    cmd=[
+                        str(vio_failure_script),
+                        "--ros-args",
+                        "-p",
+                        "delay_after_hover:="
+                        + context.launch_configurations[
+                            "vio_failure_delay_after_hover"
+                        ],
+                    ],
+                    name="vio_failure_after_hover",
+                    output="screen",
+                    emulate_tty=True,
+                )
+            )
     if context.launch_configurations["status_monitor"] == "true":
         delayed_helpers.append(
             ExecuteProcess(
@@ -149,6 +213,7 @@ def _launch_setup(context, *args, **kwargs):
     return [
         px4_process,
         scenario_launch,
+        *completion_actions,
         TimerAction(
             period=8.0,
             actions=delayed_helpers,
@@ -183,6 +248,33 @@ def generate_launch_description():
                 "status_monitor",
                 default_value="true",
                 description="Print INVALID/VIO/IMU status every second.",
+            ),
+            DeclareLaunchArgument(
+                "inject_vio_failure",
+                default_value="true",
+                description=(
+                    "Inject a VIO sensor failure after reaching HOVER."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "vio_failure_delay_after_hover",
+                default_value="5.0",
+                description=(
+                    "Seconds to wait in HOVER before injecting VIO failure."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "collect_ulog",
+                default_value="true",
+                description="Copy the PX4 ULog to a stable upload directory.",
+            ),
+            DeclareLaunchArgument(
+                "ulog_output_dir",
+                default_value=str(
+                    Path(get_package_prefix("gestelt_bringup")).parents[1]
+                    / "output/ulog"
+                ),
+                description="Directory for collected PX4 .ulg files.",
             ),
             DeclareLaunchArgument(
                 "use_ai_imu",

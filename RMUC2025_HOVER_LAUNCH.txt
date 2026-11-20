@@ -1,0 +1,45 @@
+RMUC 2025 单入口悬停仿真
+
+启动前先关闭已有仿真，然后执行：
+
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 launch gestelt_bringup rmuc2025_hover.launch.py
+
+#DELAY 10S VIO OFF
+
+ros2 launch gestelt_bringup rmuc2025_hover.launch.py \
+  vio_failure_delay_after_hover:=10.0
+
+该命令会启动：
+PX4 SITL
+Gazebo Classic RMUC 2025
+MAVROS
+AI_IMU
+导航节点
+自动起飞并进入 HOVER
+进入 HOVER 后等待 5 秒，再自动注入 VIO failure
+INVALID / VIO / IMU 状态打印
+
+每次仿真结束后，PX4 ULog 会复制到：
+/home/cjc/ws_capstone/gestelt/output/ulog/
+
+将生成的 .ulg 文件上传到：
+https://review.px4.io/
+
+默认参数：
+inject_vio_failure:=true
+vio_failure_delay_after_hover:=5.0
+
+不注入 VIO failure：
+ros2 launch gestelt_bringup rmuc2025_hover.launch.py inject_vio_failure:=false
+
+停止全部进程：
+在 launch 终端按 Ctrl+C
+
+无 Gazebo 图形界面启动：
+cd /home/cjc/ws_capstone/gestelt
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 launch gestelt_bringup rmuc2025_hover.launch.py headless:=true

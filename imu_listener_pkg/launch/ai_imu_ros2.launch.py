@@ -41,6 +41,13 @@ def generate_launch_description():
             description="Publish corrected acceleration and angular velocity.",
         ),
         DeclareLaunchArgument(
+            "publish_px4_correction",
+            default_value="false",
+            description=(
+                "Publish AirIMU corrections through mavros/hil/imu_ned for PX4."
+            ),
+        ),
+        DeclareLaunchArgument(
             "model_path",
             default_value="",
             description="ONNX model path; empty selects the packaged model.",
@@ -65,8 +72,11 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "inference_stride",
-            default_value="5",
-            description="Run inference once per N native IMU samples.",
+            default_value="1",
+            description=(
+                "Run inference once per N native IMU samples. The default "
+                "preserves the native AirIMU output rate."
+            ),
         ),
         DeclareLaunchArgument(
             "inference_threads",
@@ -322,6 +332,9 @@ def generate_launch_description():
             ),
             "publish_corrected_imu": LaunchConfiguration(
                 "publish_corrected_imu"
+            ),
+            "publish_px4_correction": LaunchConfiguration(
+                "publish_px4_correction"
             ),
             "model_path": LaunchConfiguration("model_path"),
             "buffer_size": LaunchConfiguration("buffer_size"),
